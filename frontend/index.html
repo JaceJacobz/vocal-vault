@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Connect the stylesheet -->
+    <link rel="stylesheet" href="style.css">
+
+    <title>Vocal Vault</title>
+</head>
+<body>
+
+<div id="app-container">
+
+    <!-- APPLICATION HEADER -->
+    <header class="app-header">
+        <div>
+            <h1>VOCAL VAULT</h1>
+            <p class="subtitle">
+                Automatic Vocal Tuning, Mixing & Mastering
+            </p>
+        </div>
+    </header>
+
+    <!-- =====================================================
+         STEP 1: UPLOAD VOCAL AND BEAT
+    ====================================================== -->
+    <section id="upload-section" class="app-step">
+
+        <div class="step-heading">
+            <span class="step-number">01</span>
+            <div>
+                <h2>Upload your tracks</h2>
+                <p>Choose the vocal recording and instrumental beat.</p>
+            </div>
+        </div>
+
+        <div class="upload-grid">
+
+            <!-- Vocal upload -->
+            <div class="upload-card">
+                <label for="vocal-input">VOCAL TRACK</label>
+
+                <input
+                    type="file"
+                    id="vocal-input"
+                    accept="audio/*"
+                >
+
+                <span id="vocal-file-name" class="file-name">
+                    No vocal selected
+                </span>
+            </div>
+
+            <!-- Beat upload -->
+            <div class="upload-card">
+                <label for="beat-input">INSTRUMENTAL BEAT</label>
+
+                <input
+                    type="file"
+                    id="beat-input"
+                    accept="audio/*"
+                >
+
+                <span id="beat-file-name" class="file-name">
+                    No beat selected
+                </span>
+            </div>
+
+        </div>
+
+        <button id="start-alignment-button" class="primary-button">
+            Continue to Alignment
+        </button>
+
+    </section>
+
+
+    <!-- =====================================================
+         STEP 2: ALIGN THE VOCAL WITH THE BEAT
+    ====================================================== -->
+    <section id="alignment-section" class="app-step hidden">
+
+        <div class="step-heading">
+            <span class="step-number">02</span>
+
+            <div>
+                <h2>Align your vocal</h2>
+                <p>
+                    Move the vocal until it sits correctly against the beat.
+                </p>
+            </div>
+        </div>
+
+        <!-- Display selected files -->
+        <div class="track-info">
+
+            <div>
+                <span class="track-label">VOCAL</span>
+                <strong id="alignment-vocal-name">—</strong>
+            </div>
+
+            <div>
+                <span class="track-label">BEAT</span>
+                <strong id="alignment-beat-name">—</strong>
+            </div>
+
+        </div>
+
+        <!-- Audio timeline and waveforms -->
+        <div class="timeline-wrap">
+
+            <div class="timeline-header">
+                <span>BEAT</span>
+                <span id="beat-duration">0:00</span>
+            </div>
+
+            <canvas
+                id="beat-waveform"
+                class="waveform"
+            ></canvas>
+
+            <div class="timeline-header vocal-header">
+                <span>VOCAL</span>
+                <span id="vocal-offset-display">Offset: 0.00s</span>
+            </div>
+
+            <div id="vocal-track-container" class="vocal-track-container">
+                <canvas
+                    id="vocal-waveform"
+                    class="waveform vocal-waveform"
+                ></canvas>
+            </div>
+
+            <!-- Playhead: one long line through both tracks -->
+            <div class="playhead-layer">
+                <div id="loop-region" class="loop-region"></div>
+                <div id="playhead" class="playhead" title="Drag to move the playhead">
+                    <span class="playhead-handle"></span>
+                </div>
+            </div>
+
+        </div>
+
+        <p class="timeline-hint">
+            Click the beat waveform or drag the white line to choose where
+            playback starts. Drag the blue vocal to move it.
+        </p>
+
+        <!-- Vocal position slider -->
+        <div class="alignment-controls">
+
+            <div class="control-title">
+                <span>VOCAL POSITION</span>
+                <strong id="offset-value">0.00s</strong>
+            </div>
+
+            <input
+                type="range"
+                id="offset-slider"
+                min="-15"
+                max="15"
+                value="0"
+                step="0.001"
+            >
+
+            <div class="range-labels">
+                <span>-15s</span>
+                <span>0s</span>
+                <span>+15s</span>
+            </div>
+
+            <!-- Fine adjustment: 1 ms and 10 ms steps -->
+            <div class="nudge-row" role="group" aria-label="Fine adjust vocal position">
+                <button type="button" class="chip-button" data-nudge="-0.01">−10 ms</button>
+                <button type="button" class="chip-button" data-nudge="-0.001">−1 ms</button>
+                <button type="button" class="chip-button" data-nudge="0.001">+1 ms</button>
+                <button type="button" class="chip-button" data-nudge="0.01">+10 ms</button>
+            </div>
+
+            <p class="nudge-hint">
+                Minus moves the vocal earlier, plus moves it later.
+                The beat never moves.
+            </p>
+
+        </div>
+
+        <!-- Loop: replay the same few seconds while you adjust -->
+        <div class="loop-controls">
+            <label class="loop-toggle">
+                <input type="checkbox" id="loop-toggle" checked>
+                Loop
+            </label>
+
+            <select id="loop-length" aria-label="Loop length">
+                <option value="2">2 s</option>
+                <option value="4" selected>4 s</option>
+                <option value="8">8 s</option>
+                <option value="16">16 s</option>
+            </select>
+
+            <span class="loop-note">from the playhead</span>
+        </div>
+
+        <!-- Alignment actions -->
+        <div class="alignment-actions">
+
+            <button id="auto-align-button" class="secondary-button">
+                Auto Align
+            </button>
+
+            <button id="preview-alignment-button" class="secondary-button">
+                ▶ Play Preview
+            </button>
+
+        </div>
+
+        <div class="alignment-note">
+            <strong>Tip:</strong>
+            Put the playhead where the vocal comes in, press Play Preview and
+            leave Loop on. Then move the slider or nudge the vocal: you hear
+            every change instantly, on the same few seconds, with no waiting.
+            Fine timing and tempo correction will be handled during
+            processing.
+        </div>
+
+        <button id="continue-analysis-button" class="primary-button">
+            Continue to Analysis
+        </button>
+
+    </section>
+
+
+    <!-- =====================================================
+         STEP 3: AUDIO ANALYSIS
+         Beat BPM, beat key, vocal pitch and vocal tempo.
+    ====================================================== -->
+    <section id="analysis-section" class="app-step hidden">
+
+        <div class="step-heading">
+            <span class="step-number">03</span>
+
+            <div>
+                <h2>Audio analysis</h2>
+                <p>
+                    Vocal Vault will determine the musical relationship
+                    between your tracks.
+                </p>
+            </div>
+        </div>
+
+        <!-- Analysis results -->
+        <div class="analysis-grid">
+
+            <div class="analysis-card">
+                <span>BEAT BPM</span>
+                <strong id="beat-bpm">—</strong>
+                <small id="beat-bpm-status">Waiting for analysis</small>
+
+                <!-- Half/double-time correction, shown after detection -->
+                <div id="bpm-adjust" class="tempo-adjust hidden">
+                    <button id="bpm-half-button" class="chip-button" type="button" aria-label="Halve the detected BPM">÷ 2</button>
+                    <button id="bpm-double-button" class="chip-button" type="button" aria-label="Double the detected BPM">× 2</button>
+                </div>
+            </div>
+
+            <div class="analysis-card">
+                <span>BEAT KEY</span>
+                <strong id="beat-key">—</strong>
+                <small>Waiting for analysis</small>
+            </div>
+
+            <div class="analysis-card">
+                <span>VOCAL PITCH</span>
+                <strong id="vocal-pitch">—</strong>
+                <small>Waiting for analysis</small>
+            </div>
+
+            <div class="analysis-card">
+                <span>VOCAL TEMPO</span>
+                <strong id="vocal-bpm">—</strong>
+                <small id="vocal-bpm-status">Waiting for analysis</small>
+                <small id="vocal-bpm-compare"></small>
+            </div>
+
+        </div>
+
+        <div class="coming-soon">
+            <span>NEXT STAGE</span>
+
+            <p>
+                With the tempo, key and vocal pitch measured, the next stage
+                is automatic pitch correction. Time-stretching comes after.
+            </p>
+        </div>
+
+        <button id="continue-tune-button" class="primary-button">
+            Continue to Pitch Correction
+        </button>
+
+    </section>
+
+
+    <!-- =====================================================
+         STEP 4: PITCH CORRECTION
+         Moves every note onto the beat's key.
+    ====================================================== -->
+    <section id="tune-section" class="app-step hidden">
+
+        <div class="step-heading">
+            <span class="step-number">04</span>
+
+            <div>
+                <h2>Pitch correction</h2>
+                <p>
+                    Move each note onto the beat's key while keeping the
+                    performance natural.
+                </p>
+            </div>
+        </div>
+
+        <div class="analysis-grid">
+
+            <div class="analysis-card">
+                <span>KEY</span>
+                <div class="tune-inline">
+                    <select id="tune-root" aria-label="Key root note"></select>
+                    <select id="tune-scale" aria-label="Major or minor">
+                        <option value="major">Major</option>
+                        <option value="minor">Minor</option>
+                    </select>
+                </div>
+                <small id="tune-key-note">Waiting for the beat key</small>
+            </div>
+
+            <div class="analysis-card">
+                <span>BEAT TUNING</span>
+                <strong id="tune-ref">—</strong>
+                <small id="tune-ref-note">Measured from the beat</small>
+            </div>
+
+        </div>
+
+        <div class="alignment-controls tune-controls">
+
+            <div class="tune-row">
+                <label for="tune-strength">CORRECTION STRENGTH</label>
+                <strong id="tune-strength-value">100%</strong>
+                <input type="range" id="tune-strength" class="tune-slider" min="0" max="100" value="100" step="1">
+            </div>
+
+            <div class="tune-row">
+                <label for="tune-retune">RETUNE SPEED</label>
+                <strong id="tune-retune-value">Instant</strong>
+                <input type="range" id="tune-retune" class="tune-slider" min="0" max="150" value="0" step="5">
+            </div>
+
+            <div class="tune-row">
+                <label for="tune-flatten">FLATTEN VIBRATO</label>
+                <strong id="tune-flatten-value">100%</strong>
+                <input type="range" id="tune-flatten" class="tune-slider" min="0" max="100" value="100" step="5">
+            </div>
+
+            <p class="nudge-hint">
+                Strength 100% snaps every note exactly onto the scale with no limits;
+                lower values pull partway and ignore very small errors. Retune speed:
+                lower is tighter and more robotic, higher is smoother. Flatten vibrato:
+                0% keeps it all, 100% holds each note dead straight.
+            </p>
+
+        </div>
+
+        <div class="loop-controls">
+            <label class="loop-toggle">
+                <input type="checkbox" id="tune-test">
+                Test mode: detune the vocal first
+            </label>
+            <span class="loop-note">
+                60–100 cents on most notes, plus some wrong notes
+            </span>
+        </div>
+
+        <button id="tune-run-button" class="primary-button">
+            Run Pitch Correction
+        </button>
+
+        <p id="tune-status" class="timeline-hint" aria-live="polite"></p>
+
+        <div id="tune-results" class="hidden">
+
+            <p id="tune-key-warning" class="tune-warning hidden"></p>
+
+            <div class="tune-table-wrap">
+                <table class="tune-table">
+                    <thead>
+                        <tr>
+                            <th></th>
+                            <th>In key</th>
+                            <th>Median off scale (cents)</th>
+                            <th>Within 25 cents</th>
+                            <th>Notes out of key</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tune-stats-body"></tbody>
+                </table>
+            </div>
+
+            <p id="tune-result-note" class="nudge-hint"></p>
+
+            <div class="timeline-wrap tune-chart">
+                <div class="timeline-header">
+                    <span>PITCH</span>
+                    <span class="tune-legend">
+                        <i class="swatch swatch-original"></i>original
+                        <i class="swatch swatch-detuned hidden"></i><span id="tune-legend-detuned" class="hidden">detuned</span>
+                        <i class="swatch swatch-tuned"></i>corrected
+                    </span>
+                </div>
+                <canvas id="tune-contour" class="tune-canvas"></canvas>
+                <input type="range" id="tune-scroll" class="tune-slider" min="0" max="0" value="0" step="0.1" aria-label="Scroll the pitch view">
+            </div>
+
+            <!-- =====================================================
+     PITCH CORRECTION TRANSPORT
+     ===================================================== -->
+
+            <div class="pitch-transport-container">
+
+                <!-- Main transport -->
+                <div class="transport-main-controls">
+
+                    <button
+                        type="button"
+                        id="pitch-play-btn"
+                        class="primary-button pitch-play-button"
+                    >
+                        ▶ Play
+                    </button>
+
+                    <button
+                        type="button"
+                        id="pitch-stop-btn"
+                        class="secondary-button"
+                    >
+                        ■ Stop
+                    </button>
+
+                </div>
+
+
+                <!-- A/B version selector -->
+
+                <div class="ab-toggle-group">
+                    <button id="mode-original-btn" class="ab-btn">Original Vocal</button>
+                    <button id="mode-detuned-btn" class="ab-btn hidden">Detuned Test</button>
+                    <button id="mode-corrected-btn" class="ab-btn active">Corrected Vocal</button>
+                </div>
+
+
+                <!-- Re-listen controls -->
+
+                <div class="jump-controls">
+
+                    <button
+                        type="button"
+                        id="pitch-rewind-5s"
+                        class="btn-nudge"
+                        title="Rewind 5 seconds"
+                    >
+                        ↺ -5s
+                    </button>
+
+                    <button
+                        type="button"
+                        id="pitch-rewind-2s"
+                        class="btn-nudge"
+                        title="Rewind 2 seconds"
+                    >
+                        ↺ -2s
+                    </button>
+
+                    <button
+                        type="button"
+                        id="pitch-forward-5s"
+                        class="btn-nudge"
+                        title="Forward 5 seconds"
+                    >
+                        +5s ↻
+                    </button>
+
+                </div>
+
+
+                <!-- Loop -->
+
+                <div class="loop-control">
+
+                    <label>
+                        <input
+                            type="checkbox"
+                            id="pitch-loop-toggle"
+                        >
+                        Loop 4s Region
+                    </label>
+
+                </div>
+
+            </div>
+
+
+            <p class="pitch-position-display">
+                Position: <strong id="pitch-position">0:00</strong>
+            </p>
+
+            <p class="nudge-hint">
+                Use the A/B controls to compare the original and corrected vocal
+                at the same position. Rewind to hear a phrase again or enable
+                the 4-second loop for detailed comparison.
+            </p>
+
+            <a id="tune-download" class="secondary-button tune-download" download="vocal-tuned.wav" href="#">
+                Download corrected vocal (WAV)
+            </a>
+
+        </div>
+
+        <button id="continue-mix-button" class="primary-button">
+            Continue to Mix &amp; Master
+        </button>
+
+    </section>
+
+
+    <!-- =====================================================
+         STEP 5: MIX & MASTER
+         Vocal polish, level matching, space and mastering.
+         The level-matching panel (levelmatch.js) inserts itself
+         just above the button below.
+    ====================================================== -->
+    <section id="mix-section" class="app-step hidden">
+
+        <div class="step-heading">
+            <span class="step-number">05</span>
+
+            <div>
+                <h2>Mix &amp; master</h2>
+                <p>
+                    Vocal Vault measures both tracks and decides every
+                    setting itself. It uses the corrected vocal if you ran
+                    pitch correction.
+                </p>
+            </div>
+        </div>
+
+        <button id="automix-button" class="primary-button">
+            Mix &amp; Master
+        </button>
+
+        <p id="automix-status" class="timeline-hint" aria-live="polite"></p>
+
+        <audio id="mix-audio-player" class="mix-player" controls></audio>
+
+        <a id="mix-download" class="secondary-button tune-download hidden" download="vocal-vault-master.wav" href="#">
+            Download final mix (WAV)
+        </a>
+
+    </section>
+
+
+    <!-- FOOTER -->
+    <footer>
+        Vocal Vault · Audio processing prototype
+    </footer>
+
+</div>
+
+<!-- Load JavaScript after the page content -->
+<script src="analysis.js"></script>
+<script src="pitchcorrect.js"></script>
+<script src="script.js"></script>
+<script src="studio.js"></script>
+<script src="levelmatch.js"></script>
+<script src="automix.js"></script>
+<script src="tune.js"></script>
+
+</body>
+</html>

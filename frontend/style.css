@@ -1,0 +1,1110 @@
+/* =========================================================
+   VOCAL VAULT — STYLE SHEET
+   Rewritten to match the class names and IDs in index.html
+   ========================================================= */
+
+* {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+:root {
+    --bg: #0b0b0d;
+    --panel: #131316;
+    --panel-light: #1a1a1f;
+    --border: #2a2a30;
+    --text: #f5f5f5;
+    --muted: #9a9aa3;
+    --accent: #ff5433;
+    --accent-hover: #ff684a;
+    --accent-tint: rgba(255, 84, 51, 0.08);
+    --vocal: #0099cc;          /* matches the hue-shifted vocal waveform */
+    --on-accent: #0b0b0d;
+
+    --radius-lg: 16px;
+    --radius-md: 12px;
+    --radius-sm: 8px;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    line-height: 1.5;
+}
+
+/* script.js toggles this to move between steps */
+.hidden {
+    display: none !important;
+}
+
+button,
+input {
+    font-family: inherit;
+}
+
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+}
+
+/* =========================================================
+   PAGE LAYOUT
+   ========================================================= */
+
+#app-container {
+    width: min(100% - 32px, 760px);
+    margin: 0 auto;
+    padding: 48px 0 56px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+/* =========================================================
+   HEADER
+   ========================================================= */
+
+.app-header {
+    padding-bottom: 8px;
+}
+
+.app-header h1 {
+    font-size: clamp(34px, 8vw, 54px);
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    line-height: 1;
+}
+
+.subtitle {
+    margin-top: 12px;
+    color: var(--muted);
+    font-size: 15px;
+}
+
+/* =========================================================
+   STEP PANELS
+   ========================================================= */
+
+.app-step {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 28px;
+}
+
+.step-heading {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    margin-bottom: 24px;
+}
+
+.step-number {
+    flex-shrink: 0;
+    margin-top: 3px;
+    padding: 3px 9px;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.4;
+}
+
+.step-heading h2 {
+    font-size: 22px;
+    line-height: 1.25;
+    letter-spacing: -0.01em;
+}
+
+.step-heading p {
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 14px;
+}
+
+/* =========================================================
+   STEP 1 — UPLOAD
+   ========================================================= */
+
+.upload-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+.upload-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-width: 0;
+    padding: 18px;
+    background: var(--panel-light);
+    border: 1px dashed #3b3b43;
+    border-radius: var(--radius-md);
+    transition: border-color 0.15s ease;
+}
+
+.upload-card:hover,
+.upload-card:focus-within {
+    border-color: var(--accent);
+}
+
+.upload-card label {
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.upload-card input[type="file"] {
+    width: 100%;
+    color: var(--muted);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.upload-card input[type="file"]::file-selector-button {
+    margin-right: 12px;
+    padding: 9px 14px;
+    background: #25252b;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.upload-card input[type="file"]::file-selector-button:hover {
+    background: #303038;
+}
+
+.file-name {
+    color: var(--muted);
+    font-size: 13px;
+    overflow-wrap: anywhere;
+}
+
+/* =========================================================
+   BUTTONS
+   ========================================================= */
+
+.primary-button,
+.secondary-button {
+    min-height: 48px;
+    padding: 0 20px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.primary-button {
+    display: block;
+    width: 100%;
+    margin-top: 24px;
+    background: var(--accent);
+    color: var(--on-accent);
+}
+
+.primary-button:hover {
+    background: var(--accent-hover);
+}
+
+.secondary-button {
+    background: var(--panel-light);
+    border-color: var(--border);
+    color: var(--text);
+}
+
+.secondary-button:hover {
+    background: #25252c;
+    border-color: #3b3b43;
+}
+
+.primary-button:disabled,
+.secondary-button:disabled {
+    opacity: 0.5;
+    cursor: wait;
+}
+
+/* =========================================================
+   STEP 2 — ALIGNMENT
+   ========================================================= */
+
+.track-info {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+    padding: 14px 16px;
+    background: var(--panel-light);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.track-info > div {
+    min-width: 0;
+}
+
+.track-label {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.track-info strong {
+    display: block;
+    overflow: hidden;
+    font-size: 14px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ---------- Timeline ---------- */
+
+.timeline-wrap {
+    position: relative;
+    padding: 14px;
+    background: var(--panel-light);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.timeline-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 8px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.timeline-header span:last-child {
+    font-weight: 500;
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+/* Colour key so beat and vocal can be told apart */
+.timeline-header span:first-child::before {
+    content: "";
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+}
+
+.vocal-header {
+    margin-top: 16px;
+}
+
+.vocal-header span:first-child::before {
+    background: var(--vocal);
+}
+
+.waveform {
+    display: block;
+    width: 100%;
+    height: 96px;
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+}
+
+/* Clips the vocal while it slides past the ends of the beat */
+.vocal-track-container {
+    position: relative;
+    height: 96px;
+    overflow: hidden;
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+}
+
+.vocal-waveform {
+    max-width: none;
+    background: transparent;
+    border-radius: 0;
+    cursor: grab;
+    touch-action: none;                 /* lets touch users drag sideways */
+    filter: hue-rotate(170deg);         /* orange -> blue so it differs from the beat */
+    will-change: transform;
+}
+
+.vocal-waveform:active {
+    cursor: grabbing;
+}
+
+/* ---------- Playhead (the long line) ---------- */
+
+/* Sits exactly over the waveforms: same left/right padding as .timeline-wrap */
+.playhead-layer {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 14px;
+    right: 14px;
+    pointer-events: none;
+}
+
+.playhead {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: 18px;
+    margin-left: -9px;
+    cursor: ew-resize;
+    pointer-events: auto;
+    touch-action: none;
+}
+
+.playhead::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 8px;
+    width: 2px;
+    background: #ffffff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+.playhead-handle {
+    position: absolute;
+    top: 0;
+    left: 3px;
+    width: 12px;
+    height: 12px;
+    background: #ffffff;
+    border-radius: 3px 3px 7px 7px;
+}
+
+.loop-region {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: var(--accent-tint);
+    border-left: 1px dashed var(--accent);
+    border-right: 1px dashed var(--accent);
+}
+
+#beat-waveform {
+    cursor: pointer;
+}
+
+.timeline-hint {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
+}
+
+/* ---------- Loop controls ---------- */
+
+.loop-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-top: 16px;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.loop-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.loop-toggle input {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.loop-controls select {
+    min-height: 34px;
+    padding: 0 10px;
+    background: var(--panel-light);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+}
+
+/* ---------- Offset slider ---------- */
+
+.alignment-controls {
+    margin-top: 20px;
+    padding: 16px;
+    background: var(--panel-light);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.control-title {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 14px;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+}
+
+.control-title strong {
+    color: var(--accent);
+    font-size: 15px;
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+#offset-slider {
+    display: block;
+    width: 100%;
+    height: 24px;
+    background: transparent;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+#offset-slider::-webkit-slider-runnable-track {
+    height: 6px;
+    background: #33333b;
+    border-radius: 999px;
+}
+
+#offset-slider::-moz-range-track {
+    height: 6px;
+    background: #33333b;
+    border-radius: 999px;
+}
+
+#offset-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 22px;
+    height: 22px;
+    margin-top: -8px;
+    background: var(--accent);
+    border: 3px solid var(--panel-light);
+    border-radius: 50%;
+}
+
+#offset-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: var(--accent);
+    border: 3px solid var(--panel-light);
+    border-radius: 50%;
+}
+
+.range-labels {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ---------- Fine nudge buttons ---------- */
+
+.nudge-row {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.nudge-hint {
+    margin-top: 10px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+}
+
+/* ---------- Actions and preview ---------- */
+
+.alignment-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+    margin-top: 20px;
+}
+
+.alignment-note {
+    margin-top: 20px;
+    padding: 14px 16px;
+    background: var(--accent-tint);
+    border: 1px solid rgba(255, 84, 51, 0.22);
+    border-radius: 10px;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.alignment-note strong {
+    color: var(--text);
+}
+
+/* =========================================================
+   STEP 3 — ANALYSIS
+   ========================================================= */
+
+.analysis-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.analysis-card {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 16px;
+    background: var(--panel-light);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.analysis-card span {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.analysis-card strong {
+    font-size: 30px;
+    font-weight: 700;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+}
+
+.analysis-card small {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+/* Two-line comparison under the vocal tempo */
+#vocal-bpm-compare {
+    white-space: pre-line;
+}
+
+.tempo-adjust {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.chip-button {
+    min-width: 52px;
+    min-height: 36px;
+    padding: 0 14px;
+    background: #25252b;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.chip-button:hover {
+    background: #303038;
+    border-color: #3b3b43;
+}
+
+.coming-soon {
+    margin-top: 16px;
+    padding: 16px;
+    border: 1px dashed #3b3b43;
+    border-radius: var(--radius-md);
+}
+
+.coming-soon span {
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.coming-soon p {
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: 14px;
+}
+
+/* =========================================================
+   FOOTER
+   ========================================================= */
+
+footer {
+    padding-top: 8px;
+    text-align: center;
+    color: #6a6a73;
+    font-size: 12px;
+}
+
+/* =========================================================
+   RESPONSIVE
+   ========================================================= */
+
+@media (max-width: 640px) {
+
+    #app-container {
+        width: min(100% - 24px, 760px);
+        padding-top: 32px;
+    }
+
+    .app-step {
+        padding: 20px;
+    }
+
+    .upload-grid,
+    .track-info,
+    .alignment-actions {
+        grid-template-columns: 1fr;
+    }
+
+    .step-heading h2 {
+        font-size: 20px;
+    }
+}
+
+@media (max-width: 380px) {
+
+    .analysis-grid {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+
+    * {
+        transition: none !important;
+    }
+}
+
+/* =========================================================
+   STEP 4 — PITCH CORRECTION
+   ========================================================= */
+
+.tune-inline {
+    display: flex;
+    gap: 8px;
+    margin: 4px 0;
+}
+
+.tune-inline select,
+.tune-inline select:focus {
+    min-height: 40px;
+    padding: 0 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font: inherit;
+    font-size: 18px;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.tune-controls {
+    margin-top: 16px;
+}
+
+.tune-row {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-items: center;
+    row-gap: 6px;
+    margin-bottom: 14px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+.tune-row strong {
+    color: var(--accent);
+    font-size: 15px;
+    letter-spacing: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.tune-row .tune-slider {
+    grid-column: 1 / -1;
+}
+
+.tune-slider {
+    display: block;
+    width: 100%;
+    height: 24px;
+    background: transparent;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+.tune-slider::-webkit-slider-runnable-track {
+    height: 6px;
+    background: #33333b;
+    border-radius: 999px;
+}
+
+.tune-slider::-moz-range-track {
+    height: 6px;
+    background: #33333b;
+    border-radius: 999px;
+}
+
+.tune-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 22px;
+    height: 22px;
+    margin-top: -8px;
+    background: var(--accent);
+    border: 3px solid var(--panel-light);
+    border-radius: 50%;
+}
+
+.tune-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: var(--accent);
+    border: 3px solid var(--panel-light);
+    border-radius: 50%;
+}
+
+#tune-results {
+    margin-top: 8px;
+}
+
+.tune-table-wrap {
+    margin-top: 16px;
+    overflow-x: auto;
+    background: var(--panel-light);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.tune-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    font-variant-numeric: tabular-nums;
+}
+
+.tune-table th,
+.tune-table td {
+    padding: 10px 12px;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.tune-table thead th {
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    white-space: normal;
+}
+
+.tune-table tbody th {
+    text-align: left;
+    font-weight: 700;
+}
+
+.tune-table tbody tr + tr {
+    border-top: 1px solid var(--border);
+}
+
+.tune-table tr.is-result {
+    color: var(--accent);
+}
+
+.tune-chart {
+    margin-top: 16px;
+}
+
+.tune-canvas {
+    display: block;
+    width: 100%;
+    height: 180px;
+    background: var(--bg);
+    border-radius: var(--radius-sm);
+}
+
+.tune-chart .tune-slider {
+    margin-top: 8px;
+}
+
+.tune-legend {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.tune-legend .swatch {
+    display: inline-block;
+    width: 14px;
+    height: 3px;
+    margin-left: 8px;
+    border-radius: 2px;
+}
+
+.swatch-original { background: #8a8a94; }
+.swatch-tuned { background: var(--accent); }
+
+.tune-play {
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+
+.tune-play .secondary-button.is-active {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.tune-download {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 16px;
+    text-decoration: none;
+}
+
+.swatch-detuned { background: var(--vocal); }
+
+.tune-warning {
+    margin-top: 16px;
+    padding: 14px 16px;
+    background: var(--accent-tint);
+    border: 1px solid rgba(255, 84, 51, 0.45);
+    border-radius: 10px;
+    color: var(--text);
+    font-size: 13px;
+    line-height: 1.6;
+}
+/* =========================================================
+   STEP 4 — PITCH CORRECTION TRANSPORT
+   ========================================================= */
+
+.pitch-transport-container {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    gap: 12px;
+    align-items: center;
+
+    margin-top: 16px;
+    padding: 14px;
+
+    background: var(--panel-light);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+
+/* Main play / stop controls */
+
+.transport-main-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pitch-play-button {
+    width: auto;
+    min-width: 110px;
+    margin-top: 0;
+}
+
+
+/* A/B selector */
+
+.ab-toggle-group {
+    display: flex;
+    min-width: 0;
+
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+
+    overflow: hidden;
+}
+
+.ab-btn {
+    min-height: 42px;
+    padding: 0 14px;
+
+    border: 0;
+    background: transparent;
+
+    color: var(--muted);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+
+    cursor: pointer;
+
+    transition:
+        background 0.15s ease,
+        color 0.15s ease;
+}
+
+.ab-btn:hover {
+    color: var(--text);
+}
+
+.ab-btn.active {
+    background: var(--accent);
+    color: var(--on-accent);
+}
+
+
+/* Re-listen buttons */
+
+.jump-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.btn-nudge {
+    min-height: 42px;
+    padding: 0 11px;
+
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 700;
+
+    cursor: pointer;
+
+    transition:
+        background 0.15s ease,
+        border-color 0.15s ease;
+}
+
+.btn-nudge:hover {
+    background: #25252c;
+    border-color: #3b3b43;
+}
+
+
+/* Loop */
+
+.loop-control {
+    display: flex;
+    align-items: center;
+    white-space: nowrap;
+
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.loop-control label {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+
+    cursor: pointer;
+}
+
+.loop-control input {
+    accent-color: var(--accent);
+}
+
+
+/* Position */
+
+.pitch-position-display {
+    margin-top: 8px;
+
+    color: var(--muted);
+    font-size: 12px;
+    text-align: center;
+}
+
+.pitch-position-display strong {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+}
+
+
+/* Mobile */
+
+@media (max-width: 700px) {
+
+    .pitch-transport-container {
+        grid-template-columns: 1fr;
+    }
+
+    .transport-main-controls,
+    .jump-controls {
+        width: 100%;
+    }
+
+    .transport-main-controls button {
+        flex: 1;
+    }
+
+    .ab-toggle-group {
+        width: 100%;
+    }
+
+    .ab-btn {
+        flex: 1;
+    }
+
+    .jump-controls button {
+        flex: 1;
+    }
+
+}
+
+/* =========================================================
+   STEP 5 — MIX & MASTER
+   ========================================================= */
+
+.mix-player {
+    display: block;
+    width: 100%;
+    margin-top: 16px;
+}
+
+#automix-report {
+    color: var(--muted);
+}
