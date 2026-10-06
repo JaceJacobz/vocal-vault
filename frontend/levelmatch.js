@@ -431,7 +431,7 @@ if (typeof window !== "undefined") {
 
         const beat = state.beatBuffer;
         // vocalOverride: a vocal that has already been through EQ/compression
-        const vocalBuffer = vocalOverride || state.tunedVocal || state.vocalBuffer;
+        const vocalBuffer = vocalOverride || state.tunedVocal || state.preparedVocal || state.vocalBuffer;
 
         if (!beat || !vocalBuffer) throw new Error("Both a vocal and a beat are needed.");
 
@@ -636,7 +636,9 @@ if (typeof window !== "undefined") {
                     (p.mode === "dynamic" ? `, riding up to ±${p.options.rangeDb} dB with the music).` : `, one balance for the whole song).`);
             }
             if (rendered && rendered.masterTrimDb !== undefined) text += ` The mix was trimmed ${sign(rendered.masterTrimDb)} dB so its peak is ${p.options.peakTargetDb} dBFS, leaving room for mastering.`;
-            text += usedTuned ? " Using the corrected vocal." : " Using the original vocal. Run pitch correction first to use the corrected one.";
+            text += usedTuned ? " Using the corrected vocal."
+                : S.preparedVocal ? " Using the cleaned-up vocal (no pitch correction yet)."
+                : " Using the original vocal. Run pitch correction first to use the corrected one.";
             $("level-summary").textContent = text;
 
             const list = $("level-events");
@@ -652,7 +654,7 @@ if (typeof window !== "undefined") {
         }
 
         function refresh() {
-            const vocal = S.tunedVocal || S.vocalBuffer;
+            const vocal = S.tunedVocal || S.preparedVocal || S.vocalBuffer;
             if (!vocal || !S.beatBuffer) return;
             const identity = [S.beatBuffer, vocal];
             if (refresh.last && refresh.last[0] === identity[0] && refresh.last[1] === identity[1] && lastKey === JSON.stringify([S.vocalOffset, readOptions()])) return;

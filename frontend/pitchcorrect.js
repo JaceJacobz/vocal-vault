@@ -564,6 +564,125 @@ function createTuneEngine() {
         return out;
     }
 
+    // ---------------------------------------------------------
+    // Smarter note targets.
+    //
+    // Plain snapping looks at each note alone, so a note sitting between two
+    // scale notes is a coin toss, and a singer who is flat all song gets
+    // half of the notes pulled the wrong way. Two things fix most of that:
+    //   1. the singer's habitual drift (e.g. 25 cents flat) is measured over
+    //      the whole performance and removed before choosing targets;
+    //   2. targets are chosen for the whole phrase at once (Viterbi), so the
+    //      correction keeps the intervals the singer actually sang.
+    // ---------------------------------------------------------
+
+    // Which whole-vocal move (in semitones, -6..+6) puts the sung notes best inside the beat's key?
+    // A vocal sung in the wrong key should be MOVED once, keeping its melody. Bending every note to
+    // its nearest scale note instead drags neighbouring notes in different directions.
+    function bestTransposition(notes, o) {
+
+        const mask = scaleMask(o.rootPc, o.scale);
+        const ref = (o.refCents || 0) / 100, manual = o.manualSemitones || 0;
+        const use = notes.filter(nt => nt.end - nt.start >= 6);
+        if (use.length < 6) return { s: 0, before: null, after: null };
+
+        const fit = (s) => {
+            let num = 0, den = 0;
+            for (const nt of use) {
+                const m = nt.center - ref + manual + s;
+                const d = Math.abs(m - nearestNote(m, o.rootPc, mask, false)) * 100;
+                const w = nt.end - nt.start;
+                num += w * Math.exp(-Math.pow(d / 40, 2)); den += w;
+            }
+            return num / den;
+        };
+
+        const before = fit(0);
+        const fits = {};
+        let bestS = 0, bestF = before;
+        for (let s = -6; s <= 6; s++) {
+            const f = s === 0 ? before : fit(s);
+            fits[s] = f;
+            // equally good moves: the smaller one wins; at a tritone (+6 / -6) go UP
+            const tie = Math.abs(f - bestF) < 1e-9 && (Math.abs(s) < Math.abs(bestS) || (Math.abs(s) === Math.abs(bestS) && s > bestS));
+            if (f > bestF + 1e-9 || tie) { bestF = f; bestS = s; }
+        }
+        let second = 0;
+        // +6 and -6 are the same note an octave apart, so the mirror move is not a rival
+        for (let s = -6; s <= 6; s++) if (s !== bestS && Math.abs(s - bestS) !== 12 && fits[s] > second) second = fits[s];
+
+        // Only act on clear evidence. With 13 possible moves some move fits a key-less melody
+        // by luck, so the winner must fit well on its own AND stand clear of the runner-up.
+        if (bestS === 0 || bestF - before < 0.12 || bestF < 0.85 || bestF - second < 0.05) return { s: 0, before, after: before };
+        return { s: bestS, before, after: bestF };
+    }
+
+    function smartTargets(notes, hopSec, o) {
+
+        const mask = scaleMask(o.rootPc, o.scale);
+        const ref = (o.refCents || 0) / 100;
+        const n = notes.length;
+        const out = { targets: new Array(n), biasCents: 0, ambiguous: 0 };
+
+        if (!n) return out;
+
+        const move = o.transposeTotal || 0;
+        const c = notes.map(nt => nt.center - ref + move);
+
+        const nearestDist = (m) => Math.abs(m - nearestNote(m, o.rootPc, mask, false)) * 100;
+
+        // 1. habitual drift
+        if (n >= 6) {
+            const cost = (b) => c.reduce((s, m) => { const d = Math.min(60, nearestDist(m - b / 100)); return s + d * d; }, 0);
+            const base = cost(0);
+            let bestB = 0, bestC = base;
+            for (let b = -40; b <= 40; b += 2) { const v = cost(b); if (v < bestC) { bestC = v; bestB = b; } }
+            if (Math.abs(bestB) >= 8 && bestC < 0.85 * base) out.biasCents = bestB;
+        }
+        const adj = c.map(m => m - out.biasCents / 100);
+
+        // 2. candidates and Viterbi over the phrase
+        const cands = adj.map(m => {
+            const list = [];
+            for (let t = Math.round(m) - 2; t <= Math.round(m) + 2; t++) {
+                if (mask[((t % 12) + 12) % 12] && Math.abs(t - m) <= 1.6) list.push(t);
+            }
+            if (!list.length) list.push(nearestNote(m, o.rootPc, mask, false));
+            return list.sort((a, b) => (Math.abs(a - m) - Math.abs(b - m)) || ((b - a) * (out.biasCents > 0 ? -1 : 1))).slice(0, 3);
+        });
+
+        const MU = o.intervalWeight !== undefined ? o.intervalWeight : 0.02, W = 50;   // tiny: accuracy unchanged (tested), but exact ties now resolve consistently along a phrase
+        const maxGap = Math.round(0.5 / hopSec);
+        const cost = [], back = [];
+
+        for (let i = 0; i < n; i++) {
+            cost.push([]); back.push([]);
+            for (const t of cands[i]) {
+                const e = Math.pow(((t - adj[i]) * 100) / W, 2);
+                if (i === 0) { cost[i].push(e); back[i].push(-1); continue; }
+                const linked = notes[i].start - notes[i - 1].end <= maxGap;
+                let best = Infinity, bj = 0;
+                cands[i - 1].forEach((tp, j) => {
+                    const tr = linked ? MU * Math.pow((((t - tp) - (adj[i] - adj[i - 1])) * 100) / W, 2) : 0;
+                    const v = cost[i - 1][j] + tr;
+                    if (v < best) { best = v; bj = j; }
+                });
+                cost[i].push(best + e); back[i].push(bj);
+            }
+        }
+
+        let j = cost[n - 1].indexOf(Math.min(...cost[n - 1]));
+        for (let i = n - 1; i >= 0; i--) { out.targets[i] = cands[i][j] + ref; j = back[i][j]; }
+
+        // notes whose two best candidates are nearly equally far away
+        for (let i = 0; i < n; i++) {
+            const d = cands[i].map(t => Math.abs(t - adj[i]) * 100).sort((a, b) => a - b);
+            if (d.length > 1 && d[1] - d[0] < 20) out.ambiguous++;
+        }
+
+        return out;
+    }
+
     function planCorrection(track, notes, o) {
 
         const mask = scaleMask(o.rootPc, o.scale);
@@ -580,23 +699,56 @@ function createTuneEngine() {
         const strength = Math.max(0, Math.min(1, o.strength === undefined ? 1 : o.strength));
         const full = strength >= 1;
 
-        for (const nt of notes) {
+        const hopSec = track.hop / track.sampleRate;
+        const smart = (o.smart !== false && !o.chromatic) ? smartTargets(notes, hopSec, o) : null;
 
-            const target = nearestNote(nt.center - ref, o.rootPc, mask, o.chromatic) + ref;
+        // Notes shorter than this keep the old centre-based correction (natural for
+        // short syllables). Longer notes (held vowels like "ohhh") are corrected
+        // frame-by-frame so pitch drift across the note is fixed, not only the median.
+        const longNoteFrames = Math.ceil(0.35 / hopSec);   // ~350 ms
 
-            let offset = (target - nt.center) * 100;
+        for (let ni = 0; ni < notes.length; ni++) {
+
+            const nt = notes[ni];
+            const move = o.transposeTotal || 0;          // whole-vocal move in semitones, always applied in full
+            const target = smart
+                ? smart.targets[ni]
+                : nearestNote(nt.center - ref + move, o.rootPc, mask, o.chromatic) + ref;
+
+            // Centre residual: used for short notes and for the report.
+            let resid = (target - (nt.center + move)) * 100;
 
             if (!full) {
-                if (Math.abs(offset) < (o.deadzone || 0)) offset = 0;
+                if (Math.abs(resid) < (o.deadzone || 0)) resid = 0;
                 const cap = o.maxShift || 150;
-                offset = Math.max(-cap, Math.min(cap, offset));
-                offset *= strength;
+                resid = Math.max(-cap, Math.min(cap, resid));
+                resid *= strength;
             }
+            const offset = move * 100 + resid;
+
+            const isLong = (nt.end - nt.start) >= longNoteFrames;
+            const flatten = Math.max(0, Math.min(1, o.flatten === undefined ? 0.2 : o.flatten));
+            const dead = full ? 0 : (o.deadzone || 0);
+            const cap = full ? 9999 : (o.maxShift || 150);
 
             for (let k = nt.start; k < nt.end; k++) {
                 if (isNaN(track.midi[k])) continue;
-                const drift = (track.midi[k] - nt.center) * 100;
-                raw[k] = offset - o.flatten * drift;
+
+                if (isLong) {
+                    // Frame-level: pull THIS sample toward the target so a drifting
+                    // "ohhh" is corrected all the way through, not only at its centre.
+                    let frameResid = (target - (track.midi[k] + move)) * 100;
+                    if (Math.abs(frameResid) < dead) frameResid = 0;
+                    frameResid = Math.max(-cap, Math.min(cap, frameResid));
+                    if (!full) frameResid *= strength;
+                    // flatten still removes vibrato; when flatten is low the singer's
+                    // micro-wiggle around the target is kept.
+                    const drift = (track.midi[k] - nt.center) * 100;
+                    raw[k] = move * 100 + frameResid - flatten * drift * (1 - Math.min(1, Math.abs(frameResid) / 80));
+                } else {
+                    const drift = (track.midi[k] - nt.center) * 100;
+                    raw[k] = offset - flatten * drift;
+                }
             }
 
             info.push({ start: nt.start, end: nt.end, center: nt.center, target, offsetCents: offset });
@@ -604,7 +756,9 @@ function createTuneEngine() {
 
         return {
             shift: smoothRuns(raw, track.midi, hopMs, o.retuneMs),
-            notes: info
+            notes: info,
+            biasCents: smart ? smart.biasCents : 0,
+            ambiguous: smart ? smart.ambiguous : 0
         };
     }
 
@@ -621,6 +775,48 @@ function createTuneEngine() {
             y[i] = (P[b] - P[a]) / (b - a);
         }
         return y;
+    }
+
+    // One analysis mark per glottal period inside [runStart, runEnd].
+    // Returns an array of sample positions, or null if the run is too short.
+    function findMarks(lp, n, periodAt, runStart, runEnd) {
+
+        const T0 = periodAt(runStart);
+        if (!(T0 > 0)) return null;
+
+        let posSum = 0, negSum = 0;
+        for (let p = runStart; p + T0 < runEnd; p += Math.round(T0)) {
+            let mx = -Infinity, mn = Infinity;
+            for (let i = p; i < p + T0; i++) { if (lp[i] > mx) mx = lp[i]; if (lp[i] < mn) mn = lp[i]; }
+            posSum += mx; negSum += -mn;
+        }
+        const pol = posSum >= negSum ? 1 : -1;
+
+        let best = runStart, bv = -Infinity;
+        for (let i = runStart; i < Math.min(n, runStart + Math.round(T0)); i++) {
+            if (pol * lp[i] > bv) { bv = pol * lp[i]; best = i; }
+        }
+
+        const marks = [best];
+        for (;;) {
+            const last = marks[marks.length - 1];
+            const T = periodAt(last);
+            if (!(T > 0)) break;
+            const pred = last + T;
+            if (pred > runEnd - 0.5 * T) break;
+
+            const lo = Math.round(pred - 0.2 * T), hi = Math.round(pred + 0.2 * T);
+            let bi = Math.round(pred), bs = -Infinity;
+            for (let i = lo; i <= hi; i++) {
+                const v = pol * lp[i];
+                const pen = 1 - 0.25 * Math.abs(i - pred) / (0.2 * T);
+                const sc = v > 0 ? v * pen : v;
+                if (sc > bs) { bs = sc; bi = i; }
+            }
+            marks.push(bi);
+        }
+
+        return marks.length >= 4 ? marks : null;
     }
 
     function buildPlan(mono, sr, track, shift, o) {
@@ -670,44 +866,10 @@ function createTuneEngine() {
 
             if (maxShift < minActive) continue;
 
-            // ----- analysis marks (one per glottal period) -----
-            const T0 = periodAt(runStart);
-            if (!(T0 > 0)) continue;
-
-            let posSum = 0, negSum = 0;
-            for (let p = runStart; p + T0 < runEnd; p += Math.round(T0)) {
-                let mx = -Infinity, mn = Infinity;
-                for (let i = p; i < p + T0; i++) { if (lp[i] > mx) mx = lp[i]; if (lp[i] < mn) mn = lp[i]; }
-                posSum += mx; negSum += -mn;
-            }
-            const pol = posSum >= negSum ? 1 : -1;
-
-            let best = runStart, bv = -Infinity;
-            for (let i = runStart; i < Math.min(n, runStart + Math.round(T0)); i++) {
-                if (pol * lp[i] > bv) { bv = pol * lp[i]; best = i; }
-            }
-
-            const marks = [best];
-            for (;;) {
-                const last = marks[marks.length - 1];
-                const T = periodAt(last);
-                if (!(T > 0)) break;
-                const pred = last + T;
-                if (pred > runEnd - 0.5 * T) break;
-
-                const lo = Math.round(pred - 0.2 * T), hi = Math.round(pred + 0.2 * T);
-                let bi = Math.round(pred), bs = -Infinity;
-                for (let i = lo; i <= hi; i++) {
-                    const v = pol * lp[i];
-                    const pen = 1 - 0.25 * Math.abs(i - pred) / (0.2 * T);
-                    const s = v > 0 ? v * pen : v;
-                    if (s > bs) { bs = s; bi = i; }
-                }
-                marks.push(bi);
-            }
+            const marks = findMarks(lp, n, periodAt, runStart, runEnd);
+            if (!marks) continue;
 
             const M = marks.length;
-            if (M < 4) continue;
 
             // ----- synthesis -----
             const gapLeft = (i) => (i > 0 ? marks[i] - marks[i - 1] : marks[1] - marks[0]);
@@ -721,14 +883,18 @@ function createTuneEngine() {
 
                 while (idx + 1 < M && Math.abs(marks[idx + 1] - tSyn) <= Math.abs(marks[idx] - tSyn)) idx++;
 
+                const ratio = Math.max(0.5, Math.min(2, Math.pow(2, shiftAt(tSyn) / 1200)));
+
+                // Going DOWN spaces the output grains further apart, so they must be wider or they stop
+                // overlapping (at an octave down they would just touch and the pitch would not move).
+                const widen = ratio < 1 ? 1 / ratio : 1;
                 const l = gapLeft(idx), rr = gapRight(idx);
                 plan.ana.push(marks[idx]);
-                plan.left.push(l);
-                plan.right.push(rr);
+                plan.left.push(Math.round(l * widen));
+                plan.right.push(Math.round(rr * widen));
                 plan.syn.push(Math.round(tSyn));
 
-                const ratio = Math.pow(2, shiftAt(tSyn) / 1200);
-                tSyn += rr / Math.max(0.5, Math.min(2, ratio));   // at ratio 1 this lands exactly on the next analysis mark
+                tSyn += rr / ratio;   // at ratio 1 this lands exactly on the next analysis mark
             }
 
             // ----- how much of this region is replaced by PSOLA output -----
@@ -746,7 +912,7 @@ function createTuneEngine() {
 
     function accumulate(x, plan, out, wsum) {
 
-        const n = x.length;
+        const n = x.length, m = out.length;
 
         for (let e = 0; e < plan.ana.length; e++) {
 
@@ -754,14 +920,14 @@ function createTuneEngine() {
 
             for (let i = -l; i < 0; i++) {
                 const ai = a + i, si = s + i;
-                if (ai < 0 || si < 0 || ai >= n || si >= n) continue;
+                if (ai < 0 || si < 0 || ai >= n || si >= m) continue;
                 const w = 0.5 * (1 + Math.cos((Math.PI * i) / l));
                 out[si] += x[ai] * w;
                 if (wsum) wsum[si] += w;
             }
             for (let i = 0; i < r; i++) {
                 const ai = a + i, si = s + i;
-                if (ai < 0 || si < 0 || ai >= n || si >= n) continue;
+                if (ai < 0 || si < 0 || ai >= n || si >= m) continue;
                 const w = 0.5 * (1 + Math.cos((Math.PI * i) / r));
                 out[si] += x[ai] * w;
                 if (wsum) wsum[si] += w;
@@ -772,6 +938,17 @@ function createTuneEngine() {
     // Applies a per-frame shift (cents) to every channel. Marks are found
     // once on the mono mix so left and right stay phase-aligned.
     function applyShift(channels, mono, sr, track, shift, o) {
+
+        // A single pass cannot go much further than ~10 semitones DOWN (the grains stop overlapping).
+        // Deeper moves are made in two halves, re-measuring the pitch in between.
+        let deepest = 0;
+        for (let i = 0; i < shift.length; i++) if (shift[i] < deepest) deepest = shift[i];
+        if (deepest < -900 && !(o && o._half)) {
+            const half = Float32Array.from(shift, v => v / 2);
+            const first = applyShift(channels, mono, sr, track, half, Object.assign({}, o, { _half: 1 }));
+            const mono1 = mixDown(first);
+            return applyShift(first, mono1, sr, trackClean(mono1, sr), half, Object.assign({}, o, { _half: 2 }));
+        }
 
         const plan = buildPlan(mono, sr, track, shift, o);
 
@@ -790,7 +967,7 @@ function createTuneEngine() {
             results.push({ x, out });
         }
 
-        return results.map(({ x, out }) => {
+        const ys = results.map(({ x, out }) => {
             const y = new Float32Array(n);
             for (let i = 0; i < n; i++) {
                 const vw = plan.vw[i];
@@ -798,6 +975,126 @@ function createTuneEngine() {
                 else y[i] = x[i];
             }
             return y;
+        });
+
+        // A big pitch move leaves the voice a little quieter (fewer harmonics under the same vowel).
+        // Win the loudness back, 40 ms at a time, never turning anything down.
+        const loud = mono, blk = Math.round(0.04 * sr), blocks = Math.floor(n / blk);
+        const gains = new Float32Array(blocks + 1).fill(1);
+        for (let b = 0; b < blocks; b++) {
+            let sx = 0, sy = 0, voiced = 0;
+            for (let i = b * blk; i < (b + 1) * blk; i += 3) { sx += loud[i] * loud[i]; const v = ys[0][i]; sy += v * v; voiced += plan.vw[i]; }
+            if (voiced > 0.5 * (blk / 3) && sy > 1e-12 && sx > 1e-12) gains[b] = Math.max(1, Math.min(2.2, Math.sqrt(sx / sy)));
+        }
+        for (let pass = 0; pass < 2; pass++) for (let b = 1; b < blocks; b++) gains[b] = (gains[b - 1] + 2 * gains[b] + gains[b + 1]) / 4;
+        if (o && o.keepLoudness === false) return ys;
+        return ys.map((y) => {
+            for (let i = 0; i < n; i++) {
+                if (plan.vw[i] === 0) continue;
+                const u = i / blk, b = Math.min(blocks - 1, Math.floor(u)), f = u - b;
+                const g = gains[b] + (gains[Math.min(blocks, b + 1)] - gains[b]) * f;
+                y[i] *= 1 + (g - 1) * plan.vw[i];
+            }
+            return y;
+        });
+    }
+
+    // ---------------------------------------------------------
+    // Time warp: move parts of the vocal earlier or later without changing
+    // pitch. anchors = { tIn: [...], tOut: [...] } in samples, both rising,
+    // starting at (0, 0). Between anchors time is stretched linearly; after
+    // the last one it is simply shifted. Voiced parts use pitch-synchronous
+    // grains (so the voice stays clean), the rest uses short jittered grains.
+    // ---------------------------------------------------------
+
+    function applyWarp(channels, mono, sr, track, anchors, o) {
+
+        o = o || {};
+
+        const n = mono.length, hop = track.hop, midi = track.midi, frames = midi.length;
+        const tIn = anchors.tIn, tOut = anchors.tOut, A = tIn.length;
+        const rand = mulberry32(o.seed || 11);
+
+        const outLen = Math.max(1, Math.round(
+            tOut[A - 1] + (n - tIn[A - 1])));
+
+        function g(t) {                                  // output time -> input time
+            if (t >= tOut[A - 1]) return tIn[A - 1] + (t - tOut[A - 1]);
+            let lo = 0, hi = A - 1;
+            while (hi - lo > 1) { const m = (lo + hi) >> 1; if (tOut[m] <= t) lo = m; else hi = m; }
+            const d = tOut[hi] - tOut[lo];
+            return d <= 0 ? tIn[lo] : tIn[lo] + ((t - tOut[lo]) / d) * (tIn[hi] - tIn[lo]);
+        }
+
+        // ----- analysis marks over the whole signal -----
+        const lp = boxLowpass(mono, Math.max(3, Math.round(sr / 2000) | 1));
+        const period = new Float64Array(frames);
+        for (let k = 0; k < frames; k++) {
+            period[k] = isNaN(midi[k]) ? NaN : sr / (440 * Math.pow(2, (midi[k] - 69) / 12));
+        }
+        function periodAt(pos) {
+            const f = pos / hop, k = Math.floor(f), t = f - k;
+            const a = period[Math.min(frames - 1, k)], b = period[Math.min(frames - 1, k + 1)];
+            if (isNaN(a)) return b;
+            if (isNaN(b)) return a;
+            return a + (b - a) * t;
+        }
+
+        const marks = [];
+        const hopU = () => Math.round((0.0035 + rand() * 0.002) * sr);
+
+        function fillUnvoiced(a, b) {                    // marks for [a, b)
+            let p = a;
+            while (p < b) { marks.push(p); p += hopU(); }
+        }
+
+        let cursor = 0, k = 0;
+        while (k < frames) {
+            if (isNaN(midi[k])) { k++; continue; }
+            let r = k;
+            while (r < frames && !isNaN(midi[r])) r++;
+            const runStart = Math.max(0, k * hop - (hop >> 1));
+            const runEnd = Math.min(n - 1, (r - 1) * hop + (hop >> 1));
+            k = r;
+
+            const vm = findMarks(lp, n, periodAt, runStart, runEnd);
+            if (!vm || vm[0] < cursor) continue;
+
+            fillUnvoiced(cursor, Math.max(cursor, vm[0] - Math.round(0.002 * sr)));
+            for (const m of vm) marks.push(m);
+            cursor = vm[vm.length - 1] + Math.round(0.002 * sr);
+        }
+        fillUnvoiced(cursor, n);
+        marks.push(n - 1);
+
+        const M = marks.length;
+
+        // ----- synthesis: follow the inverse map, repeating / skipping grains -----
+        const plan = { ana: [], left: [], right: [], syn: [] };
+        let idx = 0, t = marks[0];
+
+        while (t < outLen) {
+            const target = g(t);
+            while (idx + 1 < M && Math.abs(marks[idx + 1] - target) <= Math.abs(marks[idx] - target)) idx++;
+
+            const l = idx > 0 ? marks[idx] - marks[idx - 1] : marks[1] - marks[0];
+            const r = idx < M - 1 ? marks[idx + 1] - marks[idx] : l;
+            if (l <= 0 || r <= 0) { t += 1; continue; }
+
+            plan.ana.push(marks[idx]); plan.left.push(l); plan.right.push(r); plan.syn.push(Math.round(t));
+            t += r;
+        }
+
+        const wsum = new Float32Array(outLen);
+        const outs = channels.map((x, c) => {
+            const out = new Float32Array(outLen);
+            accumulate(x, plan, out, c === 0 ? wsum : null);
+            return out;
+        });
+
+        return outs.map(out => {
+            for (let i = 0; i < outLen; i++) out[i] = wsum[i] > 1e-3 ? out[i] / wsum[i] : 0;
+            return out;
         });
     }
 
@@ -883,6 +1180,17 @@ function createTuneEngine() {
         result.contours.original = Float32Array.from(track.midi);
         result.keyFit = keyFit(track, o);
 
+        // Whole-vocal move: the user's own (manualSemitones) plus, if the vocal is clearly in another key,
+        // the one move that fits it into the beat's key best. Decided on the real vocal, before any test detune.
+        o.manualSemitones = Math.round(o.manualSemitones || 0);
+        let autoMove = { s: 0, before: null, after: null };
+        // a deliberate manual move always wins: auto-matching would simply undo it
+        if (o.autoTranspose !== false && !o.chromatic && o.manualSemitones === 0) autoMove = bestTransposition(segmentNotes(track.midi), o);
+        o.transposeTotal = o.manualSemitones + autoMove.s;
+        result.transposeAuto = autoMove.s;
+        result.transposeManual = o.manualSemitones;
+        result.transposeFit = { before: autoMove.before, after: autoMove.after };
+
         let work = channels;
 
         if (o.testDetune) {
@@ -918,15 +1226,50 @@ function createTuneEngine() {
         result.sampleRate = sr;
         result.notes = plan.notes.length;
         result.corrected = plan.notes.filter(n => Math.abs(n.offsetCents) >= 15).length;   // audible moves only
+        result.biasCents = plan.biasCents;
+        result.ambiguousNotes = plan.ambiguous;
 
         progress(1, "Done");
         return result;
     }
 
+    // ---------------------------------------------------------
+    // A harmony: every note moved up a number of SCALE steps (2 = a third above, 7 = an octave above),
+    // so it can never leave the key. Breaths and consonants are not moved.
+    // ---------------------------------------------------------
+
+    function harmonize(channels, sr, options, progress) {
+
+        progress = progress || function () { };
+        const o = Object.assign({ rootPc: 0, scale: "major", refCents: 0, degrees: 2, retuneMs: 25 }, options || {});
+        const mask = scaleMask(o.rootPc, o.scale), ref = (o.refCents || 0) / 100;
+
+        const mono = mixDown(channels);
+        progress(0.1, "Finding the notes to harmonise");
+        const track = trackClean(mono, sr);
+        const notes = segmentNotes(track.midi);
+        const raw = new Float32Array(track.midi.length);
+
+        const stepUp = (m, steps) => { let c = m, k = 0; while (k < steps) { c++; if (mask[((c % 12) + 12) % 12]) k++; } return c; };
+
+        for (const nt of notes) {
+            const home = nearestNote(nt.center - ref, o.rootPc, mask, false);
+            const target = stepUp(home, o.degrees) + ref;
+            const cents = (target - nt.center) * 100;
+            for (let k = nt.start; k < nt.end; k++) if (!isNaN(track.midi[k])) raw[k] = cents;
+        }
+
+        progress(0.4, "Building the harmony");
+        const shift = smoothRuns(raw, track.midi, (1000 * track.hop) / sr, o.retuneMs);
+        const out = applyShift(channels, mono, sr, track, shift, { force: true });
+        progress(1, "Done");
+        return { audio: { harmony: out }, contours: {}, notes: notes.length, degrees: o.degrees };
+    }
+
     return {
-        NOTE_NAMES, SCALES,
+        NOTE_NAMES, SCALES, harmonize,
         estimateTuning, trackPitch, trackClean, cleanTrack, segmentNotes,
-        measure, planCorrection, makeDetune, applyShift, buildPlan, process,
+        measure, planCorrection, smartTargets, bestTransposition, makeDetune, applyShift, applyWarp, buildPlan, process,
         mixDown, scaleMask, nearestNote
     };
 }
@@ -946,7 +1289,8 @@ function tuneVocal(channelData, sampleRate, options, onProgress) {
 
         function runHere() {
             try {
-                resolve(createTuneEngine().process(channels, sampleRate, options, onProgress));
+                const eng = createTuneEngine();
+                resolve(options && options.task === "harmony" ? eng.harmonize(channels, sampleRate, options, onProgress) : eng.process(channels, sampleRate, options, onProgress));
             } catch (err) {
                 reject(err);
             }
@@ -960,7 +1304,8 @@ function tuneVocal(channelData, sampleRate, options, onProgress) {
                 "const engine = (" + createTuneEngine.toString() + ")();\n" +
                 "self.onmessage = function (e) {\n" +
                 "  try {\n" +
-                "    const r = engine.process(e.data.channels, e.data.sampleRate, e.data.options,\n" +
+                "    const task = e.data.options && e.data.options.task === 'harmony' ? 'harmonize' : 'process';\n" +
+                "    const r = engine[task](e.data.channels, e.data.sampleRate, e.data.options,\n" +
                 "      function (f, label) { self.postMessage({ progress: f, label: label }); });\n" +
                 "    const t = [];\n" +
                 "    for (const k in r.audio) r.audio[k].forEach(function (a) { t.push(a.buffer); });\n" +
@@ -1008,6 +1353,7 @@ function estimateBeatTuning(audioBuffer) {
 if (typeof window !== "undefined") {
     window.VocalVaultTune = {
         tuneVocal,
+        harmonizeVocal: (channels, sr, options, onProgress) => tuneVocal(channels, sr, Object.assign({}, options, { task: "harmony" }), onProgress),
         estimateBeatTuning,
         noteNames: ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
     };

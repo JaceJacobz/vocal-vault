@@ -19,6 +19,9 @@ document.addEventListener("DOMContentLoaded", () => {
     const retuneSlider = $("tune-retune");
     const flattenSlider = $("tune-flatten");
     const testBox = $("tune-test");
+    const shiftSlider = $("tune-shift");
+    const autoKeyBox = $("tune-auto-key");
+    const autoNote = $("tune-auto-note");
     const runButton = $("tune-run-button");
     const statusLine = $("tune-status");
     const results = $("tune-results");
@@ -61,6 +64,7 @@ document.addEventListener("DOMContentLoaded", () => {
     bindReadout(strengthSlider, "tune-strength-value", v => `${Math.round(v)}%`);
     bindReadout(retuneSlider, "tune-retune-value", v => (v === 0 ? "Instant" : `${Math.round(v)} ms`));
     bindReadout(flattenSlider, "tune-flatten-value", v => `${Math.round(v)}%`);
+    bindReadout(shiftSlider, "tune-shift-value", v => (v === 0 ? "0 (automatic)" : `${v > 0 ? "+" : ""}${Math.round(v)} semitone${Math.abs(v) === 1 ? "" : "s"}`));
 
     // -----------------------------------------------------
     // Open the step
@@ -77,7 +81,14 @@ document.addEventListener("DOMContentLoaded", () => {
             rootSelect.value = String(NOTE_NAMES.indexOf(key.key));
             scaleSelect.value = key.scale.toLowerCase();
             keyNote.textContent = `Detected from the beat · ${Math.round(key.confidence * 100)}% confidence`;
+
+            // Moving a whole vocal is a big step, so only default it on when the key reading is trustworthy.
+            const sure = key.confidence >= 0.6;
+            autoKeyBox.checked = sure;
+            autoNote.textContent = sure ? "" : "Off for now because the beat's key reading is not certain. Check the key above, then tick this.";
         } else {
+            autoKeyBox.checked = false;
+            autoNote.textContent = "Off because the key is not known yet.";
             keyNote.textContent = "Key not detected yet. Choose it by hand.";
         }
 
@@ -101,6 +112,15 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // The vocal was cleaned up or re-timed after pitch correction ran: that result is out of date.
+    window.addEventListener("vv-prep-changed", () => {
+        if (!lastResult) return;
+        lastResult = null;
+        if (S) S.tunedVocal = null;
+        results.classList.add("hidden");
+        statusLine.textContent = "The vocal changed in the clean-up step. Run pitch correction again.";
+    });
+
     // -----------------------------------------------------
     // Run
     // -----------------------------------------------------
@@ -114,7 +134,7 @@ document.addEventListener("DOMContentLoaded", () => {
         stopPitchPlayback();
         statusLine.textContent = "Starting…";
 
-        const vocal = S.vocalBuffer;
+        const vocal = S.preparedVocal || S.vocalBuffer;     // the cleaned-up vocal when step 4 changed it
         const channels = [];
         for (let c = 0; c < vocal.numberOfChannels; c++) channels.push(vocal.getChannelData(c));
 
@@ -125,8 +145,11 @@ document.addEventListener("DOMContentLoaded", () => {
             strength: parseFloat(strengthSlider.value) / 100,
             retuneMs: parseFloat(retuneSlider.value),
             flatten: parseFloat(flattenSlider.value) / 100,
+            manualSemitones: parseInt(shiftSlider.value, 10) || 0,
+            autoTranspose: autoKeyBox.checked,
             testDetune: testBox.checked
         };
+        if (S) S.tuneOptions = { rootPc: options.rootPc, scale: options.scale, refCents: options.refCents };   // the harmony layer follows this key
 
         try {
 
@@ -222,14 +245,17 @@ document.addEventListener("DOMContentLoaded", () => {
         const fit = result.keyFit;
         warning.classList.add("hidden");
 
-        if (fit && fit.selectedPct < fit.bestPct - 0.05) {
+        // Only warn when nothing was done about it. If the whole vocal was moved into the key, the
+        // result note below already explains exactly what happened.
+        if (fit && fit.selectedPct < fit.bestPct - 0.05 && !result.transposeAuto && !result.transposeManual) {
             const names = fit.best.map(k => `${NOTE_NAMES[k.root]} ${k.scale}`).join(" / ");
             const chosen = `${NOTE_NAMES[result.options.rootPc]} ${result.options.scale}`;
             warning.textContent =
                 `Check the key: ${Math.round(fit.bestPct * 100)}% of this vocal's notes fit ${names}, ` +
                 `but only ${Math.round(fit.selectedPct * 100)}% fit ${chosen}. ` +
-                `If the beat's key was detected wrongly, pick the right one above and run again, ` +
-                `otherwise notes that were right will be moved.`;
+                `If ${chosen} is right for the beat, the vocal was sung in another key: tick "move the whole vocal into the beat's key" ` +
+                `above and run again. If the beat's key was detected wrongly, pick the right one above and run again, ` +
+                `otherwise notes that were right will be bent.`;
             warning.classList.remove("hidden");
         }
 
@@ -244,6 +270,28 @@ document.addEventListener("DOMContentLoaded", () => {
                 `(${wrong} pushed a semitone out of key). ` +
                 `A note pushed more than about 50 cents, or a wrong note sitting between two scale notes, ` +
                 `is snapped to the nearest valid note, which is not always the one the singer meant.`;
+        }
+
+        // Whole-vocal moves
+        const plural = (n) => `${Math.abs(n)} semitone${Math.abs(n) === 1 ? "" : "s"}`;
+        if (result.transposeManual) {
+            text += ` You moved the whole vocal ${result.transposeManual > 0 ? "up" : "down"} ${plural(result.transposeManual)}.`;
+        }
+        if (result.transposeAuto) {
+            const f = result.transposeFit;
+            text += ` Your vocal was sitting in a different key from the beat, so the whole vocal was moved ` +
+                `${result.transposeAuto > 0 ? "up" : "down"} ${plural(result.transposeAuto)}, which keeps your melody ` +
+                `(${Math.round(100 * f.before)}% of the notes fit the beat's key before, ${Math.round(100 * f.after)}% after). ` +
+                `If the beat's key above is wrong, untick the key-matching box and run again.`;
+        }
+
+        // What the smarter note chooser found out about this singer
+        if (result.biasCents) {
+            text += ` You sang about ${Math.abs(Math.round(result.biasCents))} cents ${result.biasCents < 0 ? "flat" : "sharp"} on average, ` +
+                `so notes between two scale notes were pulled the way you were aiming.`;
+        }
+        if (result.ambiguousNotes) {
+            text += ` ${result.ambiguousNotes} note${result.ambiguousNotes === 1 ? " was" : "s were"} close calls between two scale notes.`;
         }
 
         resultNote.textContent = text;

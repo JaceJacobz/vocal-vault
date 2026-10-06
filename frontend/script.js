@@ -74,6 +74,7 @@ document.addEventListener("DOMContentLoaded", () => {
         get beatBuffer() { return beatBuffer; },
         get audioContext() { return audioContext; },
         get vocalOffset() { return vocalOffset; },
+        get beatBpm() { return detectedBpm; },
         beatKey: null,         // set by runBeatKeyAnalysis
         vocalPitch: null       // set by runVocalPitchAnalysis (range, lowest note, pitch curve)
     };
@@ -872,6 +873,15 @@ continueAnalysisButton.addEventListener("click", () => {
     let detectedBpm = null;
     let originalBpm = null;
     let bpmConfidence = 0;
+
+    // Prep (or other steps) can set BPM when analysis missed it
+    window.VocalVaultSetBeatBpm = function (bpm) {
+        const n = Number(bpm);
+        if (!(n > 30 && n < 400)) return;
+        detectedBpm = n;
+        if (originalBpm == null) originalBpm = n;
+        try { showBpm(); } catch (e) { /* ignore */ }
+    };
 
     async function runBeatAnalysis() {
 
@@ -2047,6 +2057,10 @@ function showVocalTempo() {
                         mixDownload.href = mixUrl;
                         mixDownload.classList.remove("hidden");
                     }
+
+                    // mixui.js builds the 16/24-bit download and the fair before/after from this.
+                    window.VocalVaultState.mixBuffer = mixedBuffer;
+                    window.dispatchEvent(new Event("vv-mix-ready"));
                 }
 
             } catch (error) {

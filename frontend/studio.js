@@ -215,7 +215,10 @@ function createStudioEngine() {
     // 1/3-octave centres 100 Hz..16 kHz and a healthy long-term vocal
     // level in each (dB, only the shape matters).
     const BAND_CENTRES = [100, 126, 159, 200, 252, 317, 400, 504, 635, 800, 1000, 1260, 1587, 2000, 2520, 3175, 4000, 5040, 6350, 8000, 10079, 12699, 16000];
-    const TARGET_DB = [2, 4, 6, 7, 7.5, 7, 6, 4.5, 2.5, 1, 0, -1, -2.5, -3.5, -4.5, -5.5, -7, -8.5, -10, -12, -14.5, -17.5, -21];
+    // The tone a PRODUCED vocal aims for. The old curve described a natural speaking voice (a big hump around
+    // 250 Hz, steep fall above 4 kHz). Pulling every voice toward it added low-mid body and took away presence
+    // and air, so voices came out deeper and duller. This one is leaner below 500 Hz and brighter above 2 kHz.
+    const TARGET_DB = [0, 1.5, 2.5, 3, 3, 2.8, 2.2, 1.5, 0.8, 0.3, 0, -0.5, -1, -1.2, -1.5, -2, -2.8, -3.6, -4.6, -5.8, -7.2, -9, -12];
 
     // Where the corrective EQ may act. Gains are limited so it can fix a
     // problem but never remake the voice.
@@ -224,7 +227,8 @@ function createStudioEngine() {
         { f: 1300, Q: 1.0 }, { f: 2000, Q: 1.0 }, { f: 3200, Q: 1.0 }, { f: 5000, Q: 1.0 }, { f: 8000, Q: 1.0 }
     ];
 
-    const EQ_LIMITS = { cut: -4.5, boost: 3, shelfCut: -3, shelfBoost: 4, totalBoost: 4.5, totalCut: -6 };
+    // highCut: above 2 kHz the EQ may only trim a little (harshness is the de-esser's job), so it can never dull a voice.
+    const EQ_LIMITS = { cut: -4.5, boost: 3, shelfCut: 0, shelfBoost: 4, highCut: -0.5, totalBoost: 4.5, totalCut: -6 };
 
     // average 1/3-octave band spectrum of the singing, in dB
     function bandSpectrum(channels, sr) {
@@ -282,7 +286,7 @@ function createStudioEngine() {
 
     function planEq(measuredDb, options, sr) {
 
-        const o = Object.assign({ cutStrength: 0.6, boostStrength: 0.4, deadbandDb: 0.8, presenceDb: 1.0, airDb: 1.5 }, options || {});
+        const o = Object.assign({ cutStrength: 0.6, boostStrength: 0.4, deadbandDb: 0.8, presenceDb: 1.5, airDb: 2.0 }, options || {});
         const rate = sr || 44100;
         const refM = referenceLevel(measuredDb), refT = referenceLevel(TARGET_DB);
         const dev = measuredDb.map((v, i) => (v - refM) - (TARGET_DB[i] - refT));   // + = too much energy here
@@ -310,7 +314,9 @@ function createStudioEngine() {
         const bands = EQ_BANDS.map((b) => {
             let g = wanted(around(b.f));
             if (b.f === 3200) g += o.presenceDb;
-            return { f: b.f, Q: b.Q, gainDb: clamp(g, EQ_LIMITS.cut, EQ_LIMITS.boost) };
+            if (b.f <= 500 && g > 0) g = 0;                                   // never ADD low-mid body: it makes a voice sound deeper
+            const floor = b.f >= 2000 ? EQ_LIMITS.highCut : EQ_LIMITS.cut;     // never dull the top
+            return { f: b.f, Q: b.Q, gainDb: clamp(g, floor, EQ_LIMITS.boost) };
         });
 
         let hs = 0, hc = 0;
@@ -362,18 +368,133 @@ function createStudioEngine() {
         });
     }
 
+    // Soft expander: pull down only the quiet floor so hiss/static between
+    // phrases disappears, without the musical noise of heavy spectral denoise.
+    function phraseGate(channels, sr, options) {
+        const o = Object.assign({ depthDb: 10, openSec: 0.01, closeSec: 0.07 }, options || {});
+        const n = channels[0].length;
+        const hop = Math.max(1, Math.round(0.01 * sr));
+        const frames = Math.ceil(n / hop);
+        const mono = new Float32Array(n);
+        for (let c = 0; c < channels.length; c++) {
+            const x = channels[c];
+            for (let i = 0; i < n; i++) mono[i] += x[i] / channels.length;
+        }
+        const rms = new Float32Array(frames);
+        for (let f = 0; f < frames; f++) {
+            let e = 0;
+            const a = f * hop, b = Math.min(n, a + hop);
+            for (let i = a; i < b; i++) e += mono[i] * mono[i];
+            rms[f] = Math.sqrt(e / Math.max(1, b - a));
+        }
+        const sorted = Float32Array.from(rms).sort();
+        const loud = sorted[Math.floor(frames * 0.9)] || 1e-6;
+        const thr = Math.max(loud * 0.05, sorted[Math.floor(frames * 0.12)] * 1.6);
+        const floorGain = Math.pow(10, -o.depthDb / 20);
+        const up = 1 - Math.exp(-hop / o.openSec);
+        const down = 1 - Math.exp(-hop / o.closeSec);
+        let g = 1, closed = 0;
+        const gain = new Float32Array(n);
+        for (let f = 0; f < frames; f++) {
+            const want = rms[f] >= thr ? 1 : floorGain;
+            g += (want < g ? down : up) * (want - g);
+            if (g < 0.95) closed++;
+            const a = f * hop, b = Math.min(n, a + hop);
+            for (let i = a; i < b; i++) gain[i] = g;
+        }
+        if (closed / frames > 0.55) return { channels, applied: false };
+        return {
+            channels: channels.map((x) => {
+                const y = new Float32Array(n);
+                for (let i = 0; i < n; i++) y[i] = x[i] * gain[i];
+                return y;
+            }),
+            applied: true, depthDb: o.depthDb
+        };
+    }
+
+    // Soften breathy regions (moderate energy, not sibilant).
+    function reduceBreaths(channels, sr, options) {
+        const o = Object.assign({ cutDb: 10 }, options || {});
+        const n = channels[0].length;
+        const hop = Math.max(1, Math.round(0.01 * sr));
+        const frames = Math.ceil(n / hop);
+        const mono = new Float32Array(n);
+        for (let c = 0; c < channels.length; c++) {
+            const x = channels[c];
+            for (let i = 0; i < n; i++) mono[i] += x[i] / channels.length;
+        }
+        const rms = new Float32Array(frames), hf = new Float32Array(frames);
+        for (let f = 0; f < frames; f++) {
+            let e = 0, d = 0, prev = 0;
+            const a = f * hop, b = Math.min(n, a + hop);
+            for (let i = a; i < b; i++) {
+                const v = mono[i]; e += v * v;
+                const dv = v - prev; d += dv * dv; prev = v;
+            }
+            const len = Math.max(1, b - a);
+            rms[f] = Math.sqrt(e / len);
+            hf[f] = e > 1e-12 ? Math.min(1, Math.sqrt(d / e) / 2) : 0;
+        }
+        const sorted = Float32Array.from(rms).sort();
+        const floor = sorted[Math.floor(frames * 0.08)] || 1e-6;
+        const loud = sorted[Math.floor(frames * 0.9)] || floor * 10;
+        if (loud < floor * 4) return { channels, applied: false };
+        const mark = new Float32Array(frames);
+        for (let f = 0; f < frames; f++) {
+            if (rms[f] >= floor * 2.2 && rms[f] <= loud * 0.32 && hf[f] < 0.55) mark[f] = 1;
+        }
+        for (let f = 0; f < frames; ) {
+            if (!mark[f]) { f++; continue; }
+            let e = f; while (e < frames && mark[e]) e++;
+            if ((e - f) * hop < 0.035 * sr) for (let i = f; i < e; i++) mark[i] = 0;
+            f = e;
+        }
+        let active = 0;
+        for (const m of mark) if (m) active++;
+        if (active / frames < 0.003 || active / frames > 0.2) return { channels, applied: false };
+        const target = Math.pow(10, -o.cutDb / 20);
+        const up = 1 - Math.exp(-hop / (0.03 * sr));
+        const down = 1 - Math.exp(-hop / (0.012 * sr));
+        let g = 1;
+        const gain = new Float32Array(n);
+        for (let f = 0; f < frames; f++) {
+            const want = mark[f] ? target : 1;
+            g += (want < g ? down : up) * (want - g);
+            const a = f * hop, b = Math.min(n, a + hop);
+            for (let i = a; i < b; i++) gain[i] = g;
+        }
+        return {
+            channels: channels.map((x) => {
+                const y = new Float32Array(n);
+                for (let i = 0; i < n; i++) y[i] = x[i] * gain[i];
+                return y;
+            }),
+            applied: true, cutDb: o.cutDb
+        };
+    }
+
     // ---------------------------------------------------------
-    // The vocal polish pipeline (high-pass -> de-ess -> auto-EQ)
-    // Returns the audio plus a plain-language report.
+    // The vocal polish pipeline (high-pass -> breaths -> de-ess ->
+    // auto-EQ -> phrase gate). No heavy spectral denoise here —
+    // that is what often adds the "static" people hear.
     // ---------------------------------------------------------
 
     function prepareVocal(channels, sr, options) {
 
-        const o = Object.assign({ highPassHz: 85, deEss: true, autoEq: true }, options || {});
+        const o = Object.assign({ highPassHz: 85, deEss: true, autoEq: true, breaths: true, gate: true }, options || {});
         const report = [];
 
         let ch = highPass(channels, sr, o.highPassHz);
         report.push(`Cleaned rumble below ${Math.round(o.highPassHz)} Hz.`);
+
+        if (o.breaths !== false) {
+            const b = reduceBreaths(ch, sr);
+            ch = b.channels;
+            report.push(b.applied
+                ? `Softened breath noises by about ${b.cutDb} dB.`
+                : `Checked for breaths: none that needed work.`);
+        }
 
         let de = { applied: false, maxCutDb: 0 };
         if (o.deEss) {
@@ -397,6 +518,14 @@ function createStudioEngine() {
             } else {
                 report.push("Not enough singing to judge the tone, so the EQ was skipped.");
             }
+        }
+
+        if (o.gate !== false) {
+            const g = phraseGate(ch, sr);
+            ch = g.channels;
+            report.push(g.applied
+                ? `Quieted gaps between phrases by up to ${g.depthDb} dB (cuts hiss/static in the silences).`
+                : `Checked the gaps between phrases: already tight.`);
         }
 
         return { channels: ch, deEss: de, eq, report };

@@ -306,9 +306,110 @@ const channelsOf = (buffer) => {
 
 const signed = (v) => (v >= 0 ? "+" : "") + v.toFixed(1);
 
+/**
+ * Listen to the dry vocal (and the beat) and decide how much space it can take.
+ * Rough / already-wet / noisy vocals get almost no reverb. Clean dry vocals get more.
+ * Dense beats also push space down so the vocal stays clear.
+ */
+function measureSpaceBudget(placedChannels, beatChannels, sr, bpm) {
+
+  const mono = placedChannels.length === 1
+    ? placedChannels[0]
+    : (() => {
+        const n = placedChannels[0].length, o = new Float32Array(n);
+        for (let c = 0; c < placedChannels.length; c++)
+          for (let i = 0; i < n; i++) o[i] += placedChannels[c][i] / placedChannels.length;
+        return o;
+      })();
+
+  const n = mono.length;
+  const hop = Math.max(1, Math.round(0.02 * sr));
+  const frames = Math.ceil(n / hop);
+  const rms = new Float64Array(frames);
+
+  for (let f = 0; f < frames; f++) {
+    let s = 0;
+    const a = f * hop, b = Math.min(n, a + hop);
+    for (let i = a; i < b; i++) s += mono[i] * mono[i];
+    rms[f] = Math.sqrt(s / Math.max(1, b - a));
+  }
+
+  const sorted = Array.from(rms).sort((a, b) => a - b);
+  const floor = sorted[Math.floor(frames * 0.10)] || 1e-6;
+  const loud = sorted[Math.floor(frames * 0.90)] || floor * 10;
+  const noiseDb = 20 * Math.log10(Math.max(floor, 1e-9));
+  const loudDb = 20 * Math.log10(Math.max(loud, 1e-9));
+  const gap = loudDb - noiseDb;   // how much headroom above the floor
+
+  // How much energy lingers just after a loud phrase? High = already wet / roomy.
+  let lingerSum = 0, lingerN = 0;
+  for (let f = 2; f < frames - 2; f++) {
+    if (rms[f - 1] > loud * 0.5 && rms[f] < loud * 0.2) {
+      // look 80–160 ms after the drop
+      const k = Math.min(frames - 1, f + Math.round(0.12 / 0.02));
+      lingerSum += rms[k] / Math.max(floor, 1e-9);
+      lingerN++;
+    }
+  }
+  const linger = lingerN ? lingerSum / lingerN : 1;
+
+  // Beat density in the vocal band (1–4 kHz proxy via overall RMS of beat)
+  let beatMean = 0;
+  if (beatChannels && beatChannels[0]) {
+    const b = beatChannels[0];
+    const step = Math.max(1, Math.floor(b.length / 2000));
+    let s = 0, c = 0;
+    for (let i = 0; i < b.length; i += step) { s += b[i] * b[i]; c++; }
+    beatMean = Math.sqrt(s / Math.max(1, c));
+  }
+  const beatDb = 20 * Math.log10(Math.max(beatMean, 1e-9));
+  const denseBeat = beatDb > -22;
+
+  // Score 0 = needs to stay dry, 1 = can take normal space
+  let dryness = 1;
+  if (gap < 18) dryness -= 0.45;             // noisy floor
+  else if (gap < 24) dryness -= 0.25;
+  if (linger > 4) dryness -= 0.35;           // already rings after phrases
+  else if (linger > 2.5) dryness -= 0.2;
+  if (noiseDb > -40) dryness -= 0.2;         // absolute floor is high
+  if (denseBeat) dryness -= 0.15;
+  if (bpm > 140) dryness -= 0.1;
+  dryness = Math.max(0, Math.min(1, dryness));
+
+  // Map dryness → effect amounts (higher belowDb = quieter effect)
+  const reverbBelowDb = Math.round(16 + (1 - dryness) * 14);   // 16 … 30
+  const echoBelowDb = Math.round(20 + (1 - dryness) * 10);     // 20 … 30
+  const reverbSecMax = 0.55 + dryness * 0.85;                  // 0.55 … 1.4
+  const useDoubler = dryness > 0.4;
+  const doublerBelowDb = Math.round(12 + (1 - dryness) * 8);
+  const useRoom = dryness > 0.35;
+  const roomBelowDb = Math.round(20 + (1 - dryness) * 10);
+  const roomRt60 = 0.28 + dryness * 0.22;
+  const midDuckDb = denseBeat ? 3.5 : 2.5;
+  const duckDepth = 0.45 + (1 - dryness) * 0.2;
+  const harmonyBelowDb = Math.round(9 + (1 - dryness) * 6);
+
+  let reason;
+  if (dryness < 0.35) {
+    reason = `Listened to the vocal: it is already noisy or wet (noise floor ${noiseDb.toFixed(0)} dBFS, only ${gap.toFixed(0)} dB above the floor), so space is kept very small so it stays clear.`;
+  } else if (dryness < 0.65) {
+    reason = `Listened to the vocal: moderate room/noise in the take, so reverb and width are held back.`;
+  } else {
+    reason = `Listened to the vocal: relatively dry and clean, so a normal amount of space is safe.`;
+  }
+  if (denseBeat) reason += " The beat is dense in the mids, so the vocal is kept more forward.";
+
+  return {
+    dryness, reverbBelowDb, echoBelowDb, reverbSecMax,
+    useDoubler, doublerBelowDb, useRoom, roomBelowDb, roomRt60,
+    midDuckDb, duckDepth, harmonyBelowDb, reason,
+    noiseDb, gapDb: gap
+  };
+}
+
 async function processAutomix(state, options) {
   const opt = Object.assign({ polish: true, effects: true, master: true }, options || {});
-  const vocal = state.tunedVocal || state.vocalBuffer;   // corrected vocal when there is one
+  const vocal = state.tunedVocal || state.preparedVocal || state.vocalBuffer;   // corrected, else cleaned-up, else as recorded
   const beat = state.beatBuffer;
   const offset = state.vocalOffset || 0;
 
@@ -382,25 +483,126 @@ async function processAutomix(state, options) {
     return out;
   }
 
-  // 4. Space: reverb + echo, placed using the vocal's own fader
-  let fx = null;
+  // 4. Space: reverb + echo, placed using the vocal's own fader.
+  // Amounts are NOT fixed — they come from listening to how dry/rough the
+  // vocal already is and how dense the beat is.
+  const Fx = window.VocalVaultFxPlus && window.VocalVaultFxPlus.engine;
+  let fx = null, stems = [], beatForMix = beatChannels;
+  let space = null;
   if (opt.effects) {
     setStatus("Adding space…");
     await nextFrame();
     const placed = engine.placeVocal(vocalChannels, sr, plan, Math.ceil(plan.totalSec * sr));
-    fx = await Studio.renderFx(placed, sr);
+
+    // ---- Listen: how much space can this vocal take before it gets rough? ----
+    space = measureSpaceBudget(placed, beatChannels, sr, state.beatBpm);
+    lines.push(space.reason);
+
+    // the echo repeats on a musical fraction of the beat when the tempo is known
+    const synced = Fx ? Fx.echoTime(state.beatBpm) : null;
+    // and the reverb tail shortens with the tempo: long tails smear fast music and make it feel slow
+    const tail = Fx ? Fx.reverbTime(state.beatBpm) : null;
+    const fxOptions = {
+      reverbBelowDb: space.reverbBelowDb,
+      echoBelowDb: space.echoBelowDb,
+      duckDepth: space.duckDepth
+    };
+    if (synced) fxOptions.echoSec = synced.sec;
+    // Cap reverb length when the vocal is already wet/rough
+    if (tail) fxOptions.reverbSec = Math.min(tail, space.reverbSecMax);
+    else fxOptions.reverbSec = space.reverbSecMax;
+
+    if (space.reverbBelowDb >= 28) {
+      // Essentially dry: skip reverb, keep only a tiny echo if any
+      fxOptions.reverb = false;
+    }
+
+    fx = await Studio.renderFx(placed, sr, fxOptions);
+    if (synced) {
+      const echoDb = space.echoBelowDb;
+      fx.report = fx.report.map((l) => l.startsWith("Added a short echo")
+        ? `Added an echo timed to ${synced.label} of the beat (${Math.round(synced.sec * 1000)} ms), ${echoDb} dB below the voice, dipping out of the way while you sing.`
+        : l);
+    }
+    // Rewrite reverb report line with the adaptive level
+    fx.report = fx.report.map((l) => {
+      if (l.startsWith("Added a ") && l.includes("plate-style reverb")) {
+        return `Added a ${Number(fxOptions.reverbSec).toFixed(1)} second plate-style reverb for depth, ${space.reverbBelowDb} dB below the voice, dipping out of the way while you sing.`;
+      }
+      return l;
+    });
+    if (space.reverbBelowDb >= 28) {
+      fx.report = fx.report.filter((l) => !l.includes("plate-style reverb"));
+      fx.report.unshift("Kept the vocal dry: this take is already wet or noisy, so reverb would make it rougher.");
+    }
     lines.push(...fx.report);
+
+    if (Fx) {
+      setStatus("Widening the voice and making room in the beat…");
+      await nextFrame();
+      // optional: a higher harmony layer, built from the finished vocal and kept inside the key
+      const degrees = state.harmonyDegrees || 0;
+      const Tune = window.VocalVaultTune;
+      if (degrees && Tune && Tune.harmonizeVocal) {
+        const keyOpts = state.tuneOptions || (state.beatKey && state.beatKey.key
+          ? { rootPc: Tune.noteNames.indexOf(state.beatKey.key), scale: String(state.beatKey.scale).toLowerCase(), refCents: 0 } : null);
+        if (keyOpts) {
+          setStatus("Building the harmony…");
+          await nextFrame();
+          try {
+            const h = await Tune.harmonizeVocal(vocalChannels, sr, Object.assign({}, keyOpts, { degrees }), (f) => setStatus(`Building the harmony… ${Math.round(f * 100)}%`));
+            const hPlaced = engine.placeVocal(h.audio.harmony, sr, plan, Math.ceil(plan.totalSec * sr));
+            const stem = Fx.harmonyStem(hPlaced, sr, { belowDb: space.harmonyBelowDb });
+            stems.push(stem.channels);
+            const names = { 2: "a third", 4: "a fifth", 7: "an octave" };
+            lines.push(`Added a harmony ${names[degrees] || "above"} above the lead, in the beat's key, ${stem.belowDb} dB below the voice.`);
+          } catch (error) {
+            console.error(error);
+            lines.push("Skipped the harmony: it could not be built for this vocal.");
+          }
+        } else {
+          lines.push("Skipped the harmony: the beat's key is not known yet.");
+        }
+      }
+
+      // Doubler only when the vocal is clean enough to take width
+      if (space.useDoubler) {
+        const dbl = Fx.doubler(placed, sr, { belowDb: space.doublerBelowDb });
+        stems.push(dbl.channels);
+        lines.push(`Added a subtle double (two copies a few cents apart, ${dbl.belowDb} dB below the voice) for width.`);
+      } else {
+        lines.push("Skipped the double: the vocal is already thick or noisy, so width would blur it.");
+      }
+
+      const dip = Fx.duckBeatMid(beatChannels, Fx.toMono(placed), sr, { depthDb: space.midDuckDb });
+      beatForMix = dip.channels;
+      lines.push(`Dipped the beat's mids by up to ${dip.depthDb} dB around 2 kHz while you sing, so the voice sits in the beat instead of on top of it. Kick and bass are untouched.`);
+    }
   }
 
   // 5. Mix
   setStatus("Mixing…");
   await nextFrame();
-  const mixed = engine.mix(vocalChannels, beatChannels, sr, plan, {
-    extras: fx ? [fx.channels] : [],
+  const mixed = engine.mix(vocalChannels, beatForMix, sr, plan, {
+    extras: (fx ? [fx.channels] : []).concat(stems),
     tailSec: fx ? fx.tailSec : 0,
     skipTrim: true
   });
   let channels = mixed.channels;
+
+  // One small room around the whole mix — only when the vocal can take it.
+  if (Fx && opt.effects && space && space.useRoom) {
+    setStatus("Gluing the voice and beat together…");
+    await nextFrame();
+    const rm = Fx.room(channels, sr, { rt60: space.roomRt60, belowDb: space.roomBelowDb });
+    for (let c = 0; c < channels.length; c++) {
+      const w = rm.channels[c] || rm.channels[0], x = channels[c];
+      for (let i = 0; i < x.length && i < w.length; i++) x[i] += w[i];
+    }
+    lines.push(`Put a little of one small room (${rm.rt60.toFixed(2)} s, ${rm.belowDb} dB below the mix) around both the voice and the beat, so they sound like they were recorded in the same space.`);
+  } else if (Fx && opt.effects && space && !space.useRoom) {
+    lines.push("Skipped the shared room: the vocal needs to stay dry and forward.");
+  }
 
   // 6. Master
   let masterInfo = null;
@@ -413,6 +615,9 @@ async function processAutomix(state, options) {
     masterInfo = m.report;
     lines.push(`Mastered to ${masterInfo.outputLufs.toFixed(1)} LUFS (was ${masterInfo.inputLufs.toFixed(1)}), true peak ${masterInfo.truePeakDb.toFixed(1)} dBTP` +
       (masterInfo.limiterMaxDb >= 0.5 ? `, limiter working up to ${masterInfo.limiterMaxDb.toFixed(1)} dB.` : ", limiter barely needed."));
+    if (masterInfo.outputLufs < target - 0.6) {
+      lines.push(`Stopped ${(target - masterInfo.outputLufs).toFixed(1)} LU short of the ${target} LUFS target: getting there would take more than 8 dB of limiting on this track, which would squash the drums. Choose a quieter target for a more open sound.`);
+    }
   } else {
     // safety: never hand back a mix that clips
     let peak = 0;
@@ -420,7 +625,49 @@ async function processAutomix(state, options) {
     if (peak > 0.707) { const k = 0.707 / peak; for (const c of channels) for (let i = 0; i < c.length; i++) c[i] *= k; }
   }
 
-  const out = new AudioBuffer({ numberOfChannels: 2, length: channels[0].length, sampleRate: sr });
+  // Always end on the beat's exact length. FX are rendered with a short tail so
+  // reverb doesn't click off; we then trim so 2:09 stays 2:09.
+  const targetLen = beat.length;
+  if (channels[0].length !== targetLen) {
+    const trimmed = [new Float32Array(targetLen), new Float32Array(targetLen)];
+    const copyLen = Math.min(targetLen, channels[0].length);
+    const fadeSamples = Math.min(Math.round(0.08 * sr), copyLen);
+    for (let c = 0; c < 2; c++) {
+      const src = channels[c] || channels[0];
+      for (let i = 0; i < copyLen; i++) trimmed[c][i] = src[i];
+      // fade only when we are cutting a longer buffer
+      if (src.length > targetLen) {
+        for (let i = 0; i < fadeSamples; i++) {
+          trimmed[c][targetLen - fadeSamples + i] *= (fadeSamples - i) / fadeSamples;
+        }
+      }
+    }
+    channels = trimmed;
+  }
+
+  // Soft floor: pull residual FX hiss/static in near-silence down so the
+  // final product doesn't sound grainy between phrases.
+  {
+    let peak = 0;
+    for (const ch of channels) for (let i = 0; i < ch.length; i++) {
+      const a = Math.abs(ch[i]); if (a > peak) peak = a;
+    }
+    const thr = peak * 0.0035;
+    const floorG = 0.25;
+    if (peak > 1e-6) {
+      for (const ch of channels) {
+        for (let i = 0; i < ch.length; i++) {
+          const a = Math.abs(ch[i]);
+          if (a < thr && a > 0) {
+            const t = a / thr;
+            ch[i] *= floorG + (1 - floorG) * t * t;
+          }
+        }
+      }
+    }
+  }
+
+  const out = new AudioBuffer({ numberOfChannels: 2, length: targetLen, sampleRate: sr });
   out.copyToChannel(channels[0], 0);
   out.copyToChannel(channels[1], 1);
 
