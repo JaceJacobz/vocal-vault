@@ -408,7 +408,7 @@ function measureSpaceBudget(placedChannels, beatChannels, sr, bpm) {
 }
 
 async function processAutomix(state, options) {
-  const opt = Object.assign({ polish: true, effects: true, master: true }, options || {});
+  const opt = Object.assign({ polish: true, effects: true, master: true, beatEnhance: true, style: "universal", polishLevel: "radio" }, options || {});
   const vocal = state.tunedVocal || state.preparedVocal || state.vocalBuffer;   // corrected, else cleaned-up, else as recorded
   const beat = state.beatBuffer;
   const offset = state.vocalOffset || 0;
@@ -417,6 +417,10 @@ async function processAutomix(state, options) {
 
   const Levels = window.VocalVaultLevels;
   const Studio = window.VocalVaultStudio;
+  const Presets = window.VocalVaultPresets;
+  const recipe = Presets && Presets.resolve
+    ? Presets.resolve(opt.style || "universal", opt.polishLevel || "radio")
+    : null;
 
   const metadata = {};
   if (state.vocalPitch && state.vocalPitch.minMidi != null) {
@@ -431,13 +435,19 @@ async function processAutomix(state, options) {
   const lines = [];
   const polish = !!(Studio && opt.polish);
 
+  if (recipe) {
+    lines.push(`Style: ${recipe.styleLabel} · Polish: ${recipe.polishLabel} — ${recipe.blurb}`);
+  }
+
   // 1. Vocal polish: high-pass, de-ess, auto-EQ
   let working = vocal;
   let params = first;
   if (polish) {
     setStatus("Cleaning up and balancing the vocal…");
     await nextFrame();
-    const prepared = Studio.prepareVocal(vocal, { highPassHz: first.hpfCutoff });
+    const prepOpts = { highPassHz: first.hpfCutoff };
+    if (recipe) prepOpts.eq = recipe.eq;
+    const prepared = Studio.prepareVocal(vocal, prepOpts);
     lines.push(...prepared.report);
     working = prepared.buffer;
     // compressor settings follow the vocal as it is NOW (after the de-esser and EQ)
@@ -446,13 +456,21 @@ async function processAutomix(state, options) {
     lines.push(`Cleaned rumble below ${Math.round(first.hpfCutoff)} Hz.`);
   }
 
+  // Style/polish: tighten or loosen compression thresholds
+  if (recipe && recipe.compressTightenDb) {
+    const t = recipe.compressTightenDb;
+    if (typeof params.peakThresh === "number") params.peakThresh -= t;
+    if (typeof params.levelerThresh === "number") params.levelerThresh -= t * 0.55;
+  }
+
   // 2. Compression (your two-stage chain), then warmth
   setStatus("Evening out the vocal…");
   await nextFrame();
   let finished = await renderVocalChain(working, params, { highpass: !polish });
   lines.push("Evened out loud and quiet words with two-stage compression.");
   if (polish) {
-    const warm = Studio.finishVocal(finished);
+    const warmOpts = recipe ? { sat: recipe.sat } : undefined;
+    const warm = Studio.finishVocal(finished, warmOpts);
     finished = warm.buffer;
     lines.push(...warm.report);
   }
@@ -462,9 +480,26 @@ async function processAutomix(state, options) {
   await nextFrame();
   const engine = Levels.engine;
   const sr = beat.sampleRate;
-  const levelOptions = (options && options.levels) || (Levels.readOptions && Levels.readOptions()) || undefined;
+  let levelOptions = (options && options.levels) || (Levels.readOptions && Levels.readOptions()) || undefined;
+  if (recipe) {
+    levelOptions = Object.assign({}, levelOptions || {}, {
+      vocalAboveBeatDb: recipe.vocalAboveBeatDb
+    });
+  }
   const vocalChannels = channelsOf(finished).map((c) => engine.resample(c, finished.sampleRate, sr));
-  const beatChannels = channelsOf(beat);
+  let beatChannels = channelsOf(beat);
+
+  // Auto beat enhance: only acts when kick/low end is thin vs the mids
+  if (Studio && opt.beatEnhance !== false && Studio.engine && Studio.engine.enhanceBeat) {
+    setStatus("Balancing the beat (kick, chords, hats)…");
+    await nextFrame();
+    const enhOpts = recipe ? { strength: recipe.beatEnhanceStrength } : undefined;
+    const enh = Studio.engine.enhanceBeat(beatChannels, sr, enhOpts);
+    beatChannels = enh.channels;
+    lines.push(...enh.report);
+    state.beatEnhance = enh.analysis;
+  }
+
   const plan = engine.plan(vocalChannels, beatChannels, sr, offset, levelOptions);
 
   if (plan.warning) lines.push(plan.warning);
@@ -496,6 +531,22 @@ async function processAutomix(state, options) {
 
     // ---- Listen: how much space can this vocal take before it gets rough? ----
     space = measureSpaceBudget(placed, beatChannels, sr, state.beatBpm);
+    if (recipe) {
+      space = Object.assign({}, space);
+      space.reverbBelowDb = Math.max(8, (space.reverbBelowDb || 16) + recipe.reverbBelowAdd);
+      space.echoBelowDb = Math.max(10, (space.echoBelowDb || 22) + recipe.echoBelowAdd);
+      space.reverbSecMax = Math.max(0.35, (space.reverbSecMax || 1.4) * recipe.reverbScale);
+      space.midDuckDb = Math.max(0, (space.midDuckDb || 0) * recipe.midDuckScale);
+      if (recipe.preferDoubler === true) space.useDoubler = true;
+      if (recipe.preferDoubler === false) space.useDoubler = false;
+      if (recipe.forceMinimalFx) {
+        space.useDoubler = false;
+        space.useRoom = false;
+        space.reverbBelowDb = Math.max(space.reverbBelowDb, 24);
+        space.echoBelowDb = Math.max(space.echoBelowDb, 26);
+        space.reverbSecMax = Math.min(space.reverbSecMax, 0.7);
+      }
+    }
     lines.push(space.reason);
 
     // the echo repeats on a musical fraction of the beat when the tempo is known
@@ -576,7 +627,7 @@ async function processAutomix(state, options) {
 
       const dip = Fx.duckBeatMid(beatChannels, Fx.toMono(placed), sr, { depthDb: space.midDuckDb });
       beatForMix = dip.channels;
-      lines.push(`Dipped the beat's mids by up to ${dip.depthDb} dB around 2 kHz while you sing, so the voice sits in the beat instead of on top of it. Kick and bass are untouched.`);
+      lines.push(`Dipped the beat's mids by up to ${Number(dip.depthDb).toFixed(1)} dB around 2 kHz while you sing, so the voice sits in the beat instead of on top of it. This dip leaves the low end alone.`);
     }
   }
 
@@ -673,7 +724,8 @@ async function processAutomix(state, options) {
 
   state.autoMixParams = params;
   state.levelPlan = plan;
-  state.mixReport = { lines, master: masterInfo, polish: polish };
+  state.mixRecipe = recipe;
+  state.mixReport = { lines, master: masterInfo, polish: polish, recipe: recipe };
   window.dispatchEvent(new Event("vv-levels-updated"));
   showReport(lines);
 

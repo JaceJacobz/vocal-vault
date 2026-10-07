@@ -2536,13 +2536,392 @@ footer {
     flex-wrap: wrap;
 }
 
+/* ========== Studio responsive ========== */
+@media (max-width: 900px) {
+    .studio-layout {
+        height: calc(100vh - 56px);
+        height: calc(100dvh - 56px);
+        min-height: 0;
+    }
+
+    .studio-toolbar {
+        padding: 10px 12px;
+        gap: 10px;
+    }
+
+    .studio-toolbar-actions {
+        margin-left: 0;
+        width: 100%;
+    }
+
+    .studio-send {
+        min-width: 0;
+        flex: 1;
+    }
+
+    .studio-file-name {
+        max-width: 140px;
+    }
+}
+
 @media (max-width: 720px) {
+    .top-bar {
+        flex-wrap: wrap;
+        gap: 10px;
+        padding: 10px 12px;
+    }
+
+    .top-bar .brand-block h1 {
+        font-size: 1.05rem;
+    }
+
+    .top-bar .subtitle {
+        display: none;
+    }
+
+    .mode-switch {
+        order: 3;
+        width: 100%;
+        justify-content: stretch;
+    }
+
+    .mode-btn {
+        flex: 1;
+        text-align: center;
+        padding: 9px 12px;
+    }
+
+    .pipeline-roles {
+        display: none;
+    }
+
     .studio-ruler-row,
     .studio-lane {
-        grid-template-columns: 120px 1fr;
+        grid-template-columns: 108px 1fr;
     }
-    .mode-switch { order: 5; width: 100%; justify-content: center; }
-    .top-bar { flex-wrap: wrap; }
-    .pipeline-roles { display: none; }
-    .studio-toolbar-actions { margin-left: 0; }
+
+    .studio-lane-head {
+        padding: 6px 6px;
+        gap: 6px;
+    }
+
+    .lane-name-input {
+        font-size: 11px;
+    }
+
+    .lane-meta small {
+        font-size: 9px;
+    }
+
+    .lane-btn {
+        width: 28px;
+        height: 28px;
+        font-size: 12px;
+    }
+
+    .studio-lane,
+    .studio-lane-track {
+        min-height: 52px;
+        height: auto;
+    }
+
+    .studio-lane-track {
+        height: 52px;
+    }
+
+    .studio-clip {
+        top: 6px;
+        height: 40px;
+    }
+
+    .studio-empty {
+        inset: 48px 12px 12px 116px;
+    }
+
+    .studio-empty p {
+        font-size: 13px;
+    }
+
+    .studio-empty span {
+        font-size: 11.5px;
+        max-width: 260px;
+    }
+
+    /* Transport: two rows on tablet/phone */
+    .studio-transport {
+        flex-wrap: wrap;
+        gap: 8px 10px;
+        padding: 8px 10px calc(8px + env(safe-area-inset-bottom, 0px));
+    }
+
+    .studio-transport .transport-left {
+        order: 1;
+    }
+
+    .studio-transport .transport-center {
+        order: 3;
+        width: 100%;
+        flex: 1 1 100%;
+    }
+
+    .studio-transport .transport-right {
+        order: 2;
+        margin-left: auto;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 6px;
+        max-width: 55%;
+    }
+
+    .tr-btn {
+        width: 42px;
+        height: 42px;
+    }
+
+    .tr-status {
+        display: none;
+    }
+
+    .tr-count {
+        font-size: 10px;
+    }
+
+    .tr-countin {
+        font-size: 11px;
+    }
+
+    .tr-meter {
+        width: 40px;
+    }
+}
+
+@media (max-width: 480px) {
+    .top-bar .logo-mark {
+        width: 34px;
+        height: 34px;
+        border-radius: 9px;
+    }
+
+    .top-bar .brand-block h1 {
+        font-size: 0.98rem;
+    }
+
+    .studio-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+        padding: 8px 10px;
+        gap: 8px;
+    }
+
+    .studio-beat-slot {
+        width: 100%;
+        justify-content: space-between;
+    }
+
+    .studio-label {
+        display: none;
+    }
+
+    .studio-file-name {
+        max-width: none;
+        flex: 1;
+        min-width: 0;
+    }
+
+    .studio-toolbar-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+        width: 100%;
+    }
+
+    .studio-toolbar-actions .studio-select {
+        grid-column: 1 / -1;
+        width: 100%;
+    }
+
+    .studio-toolbar-actions .studio-tool-btn,
+    .studio-toolbar-actions .studio-send {
+        width: 100% !important;
+        min-width: 0;
+        justify-content: center;
+        padding: 11px 10px !important;
+        font-size: 12.5px !important;
+    }
+
+    .studio-send {
+        grid-column: 1 / -1;
+    }
+
+    .studio-ruler-row,
+    .studio-lane {
+        grid-template-columns: 96px 1fr;
+    }
+
+    .studio-ruler-head {
+        padding: 0 8px;
+        font-size: 10px;
+    }
+
+    .studio-lane-head {
+        flex-wrap: wrap;
+        align-content: center;
+        padding: 4px 5px;
+    }
+
+    .lane-color {
+        height: 24px;
+    }
+
+    .lane-btns {
+        width: 100%;
+        justify-content: flex-start;
+        margin-top: 2px;
+    }
+
+    .lane-btn {
+        width: 32px;
+        height: 30px;
+    }
+
+    .studio-empty {
+        inset: 40px 10px 10px 100px;
+    }
+
+    .studio-transport .transport-right {
+        max-width: none;
+        width: 100%;
+        justify-content: space-between;
+        order: 2;
+    }
+
+    .studio-transport .transport-left {
+        width: 100%;
+        justify-content: center;
+        gap: 12px;
+        order: 1;
+    }
+
+    .studio-transport .transport-center {
+        order: 3;
+    }
+
+    /* Hide less-critical toggles on very small screens; still usable via defaults */
+    .tr-loop {
+        font-size: 11px;
+    }
+
+    .tr-time {
+        font-size: 11px;
+        min-width: 44px;
+    }
+
+    /* Pipeline mode container padding on phone */
+    #mode-pipeline #app-container {
+        width: min(100% - 20px, 820px);
+        padding: 12px 0 32px;
+    }
+}
+
+/* Touch-friendly hit targets when coarse pointer */
+@media (hover: none) and (pointer: coarse) {
+    .tr-btn {
+        width: 44px;
+        height: 44px;
+    }
+
+    .lane-btn {
+        min-width: 32px;
+        min-height: 32px;
+    }
+
+    .mode-btn {
+        min-height: 40px;
+    }
+
+    .studio-tool-btn,
+    .studio-send {
+        min-height: 42px;
+    }
+
+    /* Prefer horizontal pan on timeline tracks */
+    .studio-lanes,
+    .studio-ruler-scroll,
+    .studio-lane-track {
+        touch-action: pan-x pan-y;
+    }
+}
+
+
+/* Mix option: beat enhance */
+.mix-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+.mix-check input { accent-color: var(--accent); width: 15px; height: 15px; }
+.mix-hint {
+    display: block;
+    font-size: 11px;
+    color: var(--muted);
+    margin-top: 4px;
+    line-height: 1.35;
+}
+
+
+.mix-options {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px 16px;
+    margin-bottom: 8px;
+}
+.mix-option label:not(.mix-check) {
+    display: block;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    margin-bottom: 6px;
+}
+.mix-option select {
+    width: 100%;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    font-size: 13px;
+}
+.mix-option-wide {
+    grid-column: 1 / -1;
+}
+
+
+/* Mix option: song name */
+.mix-option input[type="text"] {
+    width: 100%;
+    min-height: 44px;
+    padding: 10px 12px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+}
+.mix-option input[type="text"]::placeholder {
+    color: var(--muted-dim);
+}
+.mix-option input[type="text"]:hover {
+    border-color: var(--border-strong);
+}
+.mix-option input[type="text"]:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
 }

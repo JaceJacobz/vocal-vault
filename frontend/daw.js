@@ -14,7 +14,12 @@
     "use strict";
 
     const MAX_LANES = 20;
-    const PX_PER_SEC = 80;
+    const PX_PER_SEC_DESKTOP = 80;
+    const PX_PER_SEC_MOBILE = 48;
+
+    function pxPerSec() {
+        return window.matchMedia("(max-width: 720px)").matches ? PX_PER_SEC_MOBILE : PX_PER_SEC_DESKTOP;
+    }
     const COLORS = {
         main: "#22d3ee",
         adlib: "#a78bfa",
@@ -73,6 +78,7 @@
         els.trTot = $("tr-time-total");
         els.trLoop = $("tr-loop");
         els.trCountIn = $("tr-countin");
+        els.trRawMic = $("tr-raw-mic");
         els.trStatus = $("tr-status");
         els.trMeter = $("tr-meter-fill");
         els.trackCount = $("track-count-label");
@@ -116,7 +122,7 @@
     }
 
     function timelineWidth() {
-        return Math.ceil(totalDuration() * PX_PER_SEC) + 200;
+        return Math.ceil(totalDuration() * pxPerSec()) + 200;
     }
 
     function assignFile(input, file, nameEl) {
@@ -256,7 +262,7 @@
             const clip = document.createElement("div");
             clip.className = "studio-clip beat-clip";
             clip.style.left = "0px";
-            clip.style.width = Math.max(4, beat.duration * PX_PER_SEC) + "px";
+            clip.style.width = Math.max(4, beat.duration * pxPerSec()) + "px";
             clip.style.background = COLORS.beat;
             clip.innerHTML = "<span>" + escapeHtml(beat.name || "Beat") + "</span>";
             track.appendChild(clip);
@@ -287,8 +293,8 @@
             lane.clips.forEach((c) => {
                 const el = document.createElement("div");
                 el.className = "studio-clip";
-                el.style.left = c.start * PX_PER_SEC + "px";
-                el.style.width = Math.max(4, c.duration * PX_PER_SEC) + "px";
+                el.style.left = c.start * pxPerSec() + "px";
+                el.style.width = Math.max(4, c.duration * pxPerSec()) + "px";
                 el.style.background = lane.color;
                 el.innerHTML = "<span>" + escapeHtml(c.name) + "</span>";
                 el.title = c.name + " @ " + fmt(c.start);
@@ -312,7 +318,7 @@
                 const rect = track.getBoundingClientRect();
                 // tracks don't scroll individually - parent studio-timeline may
                 const x = e.clientX - rect.left;
-                playhead = Math.max(0, x / PX_PER_SEC);
+                playhead = Math.max(0, x / pxPerSec());
                 if (isPlaying) scheduleFrom(playhead);
                 updatePlayheadUi();
             });
@@ -376,7 +382,7 @@
         ctx.font = "10px Inter, system-ui, sans-serif";
         const dur = totalDuration();
         for (let t = 0; t <= dur + 1; t++) {
-            const x = t * PX_PER_SEC;
+            const x = t * pxPerSec();
             const major = t % 5 === 0;
             ctx.strokeStyle = major ? "#34343f" : "#26262f";
             ctx.beginPath();
@@ -388,7 +394,7 @@
     }
 
     function updatePlayheadUi() {
-        const x = playhead * PX_PER_SEC;
+        const x = playhead * pxPerSec();
         if (els.playheadEl) els.playheadEl.style.transform = "translateX(" + x + "px)";
         if (els.trCur) els.trCur.textContent = fmt(playhead);
         const dur = totalDuration();
@@ -425,15 +431,19 @@
         activeSources = [];
     }
 
-    function scheduleFrom(offset) {
+    function scheduleFrom(offset, gainValue) {
         const ctx = ensureCtx();
         stopSources();
         const startAt = ctx.currentTime;
+        const g = gainValue == null ? 1 : gainValue;
 
         if (beat.buffer && offset < beat.buffer.duration) {
             const src = ctx.createBufferSource();
             src.buffer = beat.buffer;
-            src.connect(ctx.destination);
+            const gain = ctx.createGain();
+            gain.gain.value = g;
+            src.connect(gain);
+            gain.connect(ctx.destination);
             src.start(startAt, offset);
             activeSources.push(src);
         }
@@ -447,7 +457,10 @@
 
                 const src = ctx.createBufferSource();
                 src.buffer = clip.buffer;
-                src.connect(ctx.destination);
+                const gain = ctx.createGain();
+                gain.gain.value = g;
+                src.connect(gain);
+                gain.connect(ctx.destination);
 
                 if (offset <= clip.start) {
                     const when = startAt + (clip.start - offset);
@@ -525,19 +538,30 @@
             return;
         }
 
+        // "Raw" = no browser processing (can be hissy/quiet on laptop mics).
+        // Default = clean: NS + EC + AGC — phones often ignore these; desktops need them.
+        const raw = !!(els.trRawMic && els.trRawMic.checked);
+
         try {
             ensureCtx();
             mediaStream = await navigator.mediaDevices.getUserMedia({
                 audio: {
-                    echoCancellation: false,
-                    noiseSuppression: false,
-                    autoGainControl: false
+                    channelCount: { ideal: 1 },
+                    sampleRate: { ideal: 48000 },
+                    echoCancellation: raw ? false : true,
+                    noiseSuppression: raw ? false : true,
+                    autoGainControl: raw ? false : true
                 }
             });
         } catch (err) {
-            status("Mic permission denied");
-            console.warn(err);
-            return;
+            // Fallback without ideal constraints
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } catch (err2) {
+                status("Mic permission denied");
+                console.warn(err2);
+                return;
+            }
         }
 
         if (els.trCountIn?.checked) {
@@ -556,13 +580,18 @@
               : "";
 
         try {
-            mediaRecorder = mime
-                ? new MediaRecorder(mediaStream, { mimeType: mime })
-                : new MediaRecorder(mediaStream);
+            const opts = mime ? { mimeType: mime } : {};
+            // Higher bitrate = less coding noise on quiet laptop mics
+            if (mime.indexOf("opus") !== -1) opts.audioBitsPerSecond = 192000;
+            mediaRecorder = new MediaRecorder(mediaStream, opts);
         } catch (e) {
-            status("Recorder not supported");
-            mediaStream.getTracks().forEach((t) => t.stop());
-            return;
+            try {
+                mediaRecorder = new MediaRecorder(mediaStream);
+            } catch (e2) {
+                status("Recorder not supported");
+                mediaStream.getTracks().forEach((t) => t.stop());
+                return;
+            }
         }
 
         mediaRecorder.ondataavailable = (e) => {
@@ -583,12 +612,13 @@
 
         stopSources();
         isPlaying = false;
-        scheduleFrom(recStartOffset);
+        // Play beat quieter while recording to reduce speaker→mic bleed on laptops
+        scheduleFrom(recStartOffset, 0.55);
         isPlaying = true;
         els.trPlay?.classList.add("is-active");
         playStartOffset = recStartOffset;
         playStartCtx = audioCtx.currentTime;
-        status("Recording from " + fmt(recStartOffset));
+        status("Recording from " + fmt(recStartOffset) + (raw ? " (raw mic)" : ""));
         tick();
     }
 
@@ -653,22 +683,35 @@
             const ab = await blob.arrayBuffer();
             buffer = await ctx.decodeAudioData(ab.slice(0));
             duration = buffer.duration;
+            // Lift quiet laptop takes; light high-pass to cut DC / rumble hiss floor
+            buffer = polishTake(buffer);
         } catch (e) {
             console.warn("decode rec", e);
             duration = Math.max(0.1, (recChunks.length * 50) / 1000);
         }
 
         const takeNum = lane.clips.length + 1;
-        const file = new File(
-            [blob],
-            lane.name.replace(/\s+/g, "_") + "_take" + takeNum + ".webm",
-            { type: blob.type }
-        );
+        // Prefer polished WAV for pipeline; keep original blob type as fallback name
+        let file;
+        if (buffer) {
+            const wav = audioBufferToWav(buffer);
+            file = new File(
+                [wav],
+                lane.name.replace(/\s+/g, "_") + "_take" + takeNum + ".wav",
+                { type: "audio/wav" }
+            );
+        } else {
+            file = new File(
+                [blob],
+                lane.name.replace(/\s+/g, "_") + "_take" + takeNum + ".webm",
+                { type: blob.type }
+            );
+        }
 
         lane.clips.push({
             id: uid(),
             name: "Take " + takeNum,
-            blob,
+            blob: file,
             file,
             buffer,
             start: recStartOffset,
@@ -679,6 +722,42 @@
         updateTotals();
         refreshRoles();
         status("Saved Take " + takeNum + " @ " + fmt(recStartOffset));
+    }
+
+    /** Normalize peak ~ -6 dBFS and apply a gentle high-pass (cuts jack/DC rumble). */
+    function polishTake(buffer) {
+        const sr = buffer.sampleRate;
+        const ch = buffer.numberOfChannels;
+        const len = buffer.length;
+        // Copy to new buffer
+        const out = ensureCtx().createBuffer(ch, len, sr);
+        let peak = 0;
+        for (let c = 0; c < ch; c++) {
+            const src = buffer.getChannelData(c);
+            for (let i = 0; i < len; i++) {
+                const v = Math.abs(src[i]);
+                if (v > peak) peak = v;
+            }
+        }
+        // One-pole high-pass ~80 Hz
+        const rc = 1 / (2 * Math.PI * 80);
+        const dt = 1 / sr;
+        const alpha = rc / (rc + dt);
+        const target = 0.5; // ~ -6 dBFS
+        const gain = peak > 0.001 ? Math.min(8, target / peak) : 1;
+        for (let c = 0; c < ch; c++) {
+            const src = buffer.getChannelData(c);
+            const dst = out.getChannelData(c);
+            let prevIn = 0, prevOut = 0;
+            for (let i = 0; i < len; i++) {
+                const x = src[i];
+                const y = alpha * (prevOut + x - prevIn);
+                prevIn = x;
+                prevOut = y;
+                dst[i] = y * gain;
+            }
+        }
+        return out;
     }
 
     function cleanupRecStream() {
@@ -815,7 +894,7 @@
             if (isRecording) return;
             const rect = els.rulerScroll.getBoundingClientRect();
             const x = e.clientX - rect.left + els.rulerScroll.scrollLeft;
-            playhead = Math.max(0, x / PX_PER_SEC);
+            playhead = Math.max(0, x / pxPerSec());
             if (isPlaying) scheduleFrom(playhead);
             updatePlayheadUi();
         });
@@ -866,6 +945,19 @@
         updateCount();
         refreshRoles();
         status("Ready");
+
+        // Redraw timeline when rotating phone / resizing
+        let resizeTimer = null;
+        window.addEventListener("resize", () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => {
+                if (els.shell?.classList.contains("mode-studio")) {
+                    renderLanes();
+                    drawRuler();
+                    updatePlayheadUi();
+                }
+            }, 120);
+        });
 
         window.VocalVaultDAW = {
             setMode,

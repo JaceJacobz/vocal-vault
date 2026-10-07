@@ -84,6 +84,37 @@ if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded
     const playBefore = $("mix-play-before"), playAfter = $("mix-play-after"), stopButton = $("mix-stop");
     const download = $("mix-download");
 
+    // ---- file name (user picks it; built in the page's own .mix-option style) ----
+    let nameInput = $("export-name");
+    if (!nameInput) {
+        const field = document.createElement("div");
+        field.className = "mix-option";
+        field.innerHTML = '<label for="export-name">Song name</label>';
+        nameInput = document.createElement("input");
+        nameInput.type = "text";
+        nameInput.id = "export-name";
+        nameInput.placeholder = "Name your song (optional)";
+        nameInput.maxLength = 80;
+        nameInput.autocomplete = "off";
+        field.appendChild(nameInput);
+        const anchor = formatSelect.closest(".mix-option");
+        if (anchor) anchor.after(field);
+        else download.parentNode.insertBefore(field, download);
+    }
+
+    const cleanFileName = () => nameInput.value
+        .replace(/\.wav$/i, "")
+        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "")
+        .replace(/\s+/g, " ")
+        .replace(/^[.\s]+|[.\s]+$/g, "")
+        .slice(0, 80);
+
+    const updateFileName = () => {
+        const bits = parseInt(formatSelect.value, 10);
+        download.setAttribute("download", (cleanFileName() || `vocal-vault-master-${bits}bit`) + ".wav");
+    };
+    nameInput.addEventListener("input", updateFileName);
+
     // ---- loudness target ----
     LOUDNESS_TARGETS.forEach((t) => {
         const o = document.createElement("option");
@@ -114,7 +145,7 @@ if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded
         if (downloadUrl) URL.revokeObjectURL(downloadUrl);
         downloadUrl = URL.createObjectURL(new Blob([encodeWav(channels, mix.sampleRate, bits)], { type: "audio/wav" }));
         download.href = downloadUrl;
-        download.setAttribute("download", `vocal-vault-master-${bits}bit.wav`);
+        updateFileName();
         download.textContent = `Download final mix (${bits}-bit WAV)`;
         download.classList.remove("hidden");
     }
@@ -204,3 +235,42 @@ if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded
 if (typeof module !== "undefined") {
     module.exports = { encodeWav, matchedGains, LOUDNESS_TARGETS };
 }
+
+/* Style / Polish helpers */
+(function () {
+    function updateStyleHint() {
+        const sel = document.getElementById("mix-style");
+        const hint = document.getElementById("mix-style-hint");
+        const P = window.VocalVaultPresets;
+        if (!sel || !hint || !P) return;
+        const list = P.listStyles();
+        const found = list.find((s) => s.id === sel.value);
+        if (found) hint.textContent = found.blurb;
+        // Suggest loudness when style changes (user can still override)
+        const recipe = P.resolve(sel.value, (document.getElementById("mix-polish") || {}).value || "radio");
+        const target = document.getElementById("master-target");
+        if (target && recipe.suggestedLufs != null) {
+            const want = String(recipe.suggestedLufs);
+            for (const opt of target.options) {
+                if (opt.value === want || opt.value === recipe.suggestedLufs) {
+                    target.value = opt.value;
+                    break;
+                }
+            }
+            // mixui may use data attributes - try matching by value as number
+            for (const opt of target.options) {
+                if (parseFloat(opt.value) === recipe.suggestedLufs) {
+                    target.value = opt.value;
+                    break;
+                }
+            }
+        }
+    }
+    document.addEventListener("DOMContentLoaded", () => {
+        const style = document.getElementById("mix-style");
+        const polish = document.getElementById("mix-polish");
+        if (style) style.addEventListener("change", updateStyleHint);
+        if (polish) polish.addEventListener("change", updateStyleHint);
+        updateStyleHint();
+    });
+})();

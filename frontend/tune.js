@@ -138,6 +138,7 @@ document.addEventListener("DOMContentLoaded", () => {
         const channels = [];
         for (let c = 0; c < vocal.numberOfChannels; c++) channels.push(vocal.getChannelData(c));
 
+        const selectiveBox = $("tune-selective");
         const options = {
             rootPc: parseInt(rootSelect.value, 10),
             scale: scaleSelect.value,
@@ -147,7 +148,10 @@ document.addEventListener("DOMContentLoaded", () => {
             flatten: parseFloat(flattenSlider.value) / 100,
             manualSemitones: parseInt(shiftSlider.value, 10) || 0,
             autoTranspose: autoKeyBox.checked,
-            testDetune: testBox.checked
+            testDetune: testBox.checked,
+            selective: selectiveBox ? selectiveBox.checked : true,
+            selectiveCents: 22,
+            selectiveSoftCents: 48
         };
         if (S) S.tuneOptions = { rootPc: options.rootPc, scale: options.scale, refCents: options.refCents };   // the harmony layer follows this key
 
@@ -163,7 +167,13 @@ document.addEventListener("DOMContentLoaded", () => {
             lastResult = result;
             buildBuffers(result, vocal);
             showResults(result);
-            statusLine.textContent = "";
+            if (result.selective) {
+                const s = result.selective;
+                statusLine.textContent =
+                    `Selective: fixed ${s.corrected}, partial ${s.partial}, left alone ${s.skipped} (of ${result.notes} notes).`;
+            } else {
+                statusLine.textContent = "";
+            }
 
         } catch (error) {
 
@@ -260,9 +270,20 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         const t = result.stats.tuned;
-        let text = result.corrected === 0
-            ? "No note was more than 15 cents off the scale, so only fine tightening was applied. "
-            : `${result.corrected} of ${result.notes} notes were more than 15 cents off and were pulled onto the scale. `;
+        let text;
+        if (result.selective) {
+            const s = result.selective;
+            text = s.corrected + s.partial === 0
+                ? `Selective mode: every note was already close to the scale (within ~${s.thresh} cents) — left the performance alone. `
+                : `Selective mode: pulled ${s.corrected} clearly-off note${s.corrected === 1 ? "" : "s"} onto the scale` +
+                  (s.partial ? `, eased ${s.partial} borderline note${s.partial === 1 ? "" : "s"}` : "") +
+                  (s.skipped ? `, left ${s.skipped} near-perfect note${s.skipped === 1 ? "" : "s"} untouched` : "") +
+                  `. `;
+        } else {
+            text = result.corrected === 0
+                ? "No note was more than 15 cents off the scale, so only fine tightening was applied. "
+                : `${result.corrected} of ${result.notes} notes were more than 15 cents off and were pulled onto the scale. `;
+        }
 
         if (result.detuneEvents) {
             const wrong = result.detuneEvents.filter(e => e.kind === "wrong-note").length;

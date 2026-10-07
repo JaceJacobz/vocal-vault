@@ -94,6 +94,19 @@ function createStudioEngine() {
                 (A + 1) - (A - 1) * c + beta,
                 2 * ((A - 1) - (A + 1) * c),
                 (A + 1) - (A - 1) * c - beta);
+        },
+
+        // RBJ low-shelf — used to restore thin kicks / sub weight on instrumentals
+        lowShelf(f, dB, sr) {
+            const A = Math.pow(10, dB / 40), w = 2 * Math.PI * f / sr, c = Math.cos(w);
+            const al = Math.sin(w) / 2 * Math.SQRT2, beta = 2 * Math.sqrt(A) * al;
+            return norm(
+                A * ((A + 1) - (A - 1) * c + beta),
+                2 * A * ((A - 1) - (A + 1) * c),
+                A * ((A + 1) - (A - 1) * c - beta),
+                (A + 1) + (A - 1) * c + beta,
+                -2 * ((A - 1) + (A + 1) * c),
+                (A + 1) + (A - 1) * c - beta);
         }
     };
 
@@ -853,12 +866,253 @@ function createStudioEngine() {
         };
     }
 
+
+    // ---------------------------------------------------------
+    // Beat enhance (full instrumental): listen across the spectrum
+    // and only correct bands that are out of balance — kick, body,
+    // chord/harmonic midrange, presence, hi-hats, and air.
+    // Still one stereo file (not stem separation).
+    // ---------------------------------------------------------
+
+    function rmsDbOf(x) {
+        let s = 0;
+        for (let i = 0; i < x.length; i++) s += x[i] * x[i];
+        return 10 * Math.log10(s / Math.max(1, x.length) + 1e-20);
+    }
+
+    function monoOf(channels) {
+        const n = channels[0].length;
+        const m = new Float32Array(n);
+        const ch = channels.length;
+        for (let i = 0; i < n; i++) {
+            let v = 0;
+            for (let c = 0; c < ch; c++) v += channels[c][i];
+            m[i] = v / ch;
+        }
+        return m;
+    }
+
+    function bandRmsDb(mono, sr, fLo, fHi) {
+        const filtered = runCascade(mono, [
+            design.highpass(Math.max(20, fLo), sr, 0.7),
+            design.lowpass(Math.min(sr * 0.45, fHi), sr, 0.7)
+        ]);
+        return rmsDbOf(filtered);
+    }
+
+    function peakAbs(channels) {
+        let p = 0;
+        for (const ch of channels) {
+            for (let i = 0; i < ch.length; i++) {
+                const a = Math.abs(ch[i]);
+                if (a > p) p = a;
+            }
+        }
+        return p;
+    }
+
+    /**
+     * Soft curve: if relative level is below/above a target window, propose gain.
+     * positive wantBoost when energy is low; negative when energy is high.
+     */
+    function bandCorrection(relDb, lowOk, highOk, maxBoost, maxCut) {
+        if (relDb < lowOk) {
+            return Math.min(maxBoost, (lowOk - relDb) * 0.55);
+        }
+        if (relDb > highOk) {
+            return -Math.min(maxCut, (relDb - highOk) * 0.45);
+        }
+        return 0;
+    }
+
+    /**
+     * Full-spectrum read of the instrumental vs its own midrange anchor.
+     * Bands cover drums, bass weight, chord body, presence, hats, air.
+     */
+    function analyzeBeat(channels, sr) {
+        const mono = monoOf(channels);
+        const n = mono.length;
+        const a0 = Math.floor(n * 0.08);
+        const a1 = Math.floor(n * 0.92);
+        const slice = mono.subarray(a0, Math.max(a0 + sr, a1)); // at least ~1s
+
+        // Reference = musical midrange (where chords / leads often sit)
+        const mid = bandRmsDb(slice, sr, 500, 2000);
+
+        const bands = {
+            sub:   bandRmsDb(slice, sr, 35, 70),      // sub / 808 floor
+            kick:  bandRmsDb(slice, sr, 55, 100),     // kick fundamental
+            body:  bandRmsDb(slice, sr, 100, 200),    // kick beater / low punch
+            mud:   bandRmsDb(slice, sr, 200, 400),    // boxy low-mid
+            chord: bandRmsDb(slice, sr, 350, 700),    // chord / pad body
+            harm:  bandRmsDb(slice, sr, 700, 1400),   // harmonic definition
+            pres:  bandRmsDb(slice, sr, 1800, 4000),  // attack, snare crack, lead edge
+            hat:   bandRmsDb(slice, sr, 6000, 10000), // hi-hats
+            air:   bandRmsDb(slice, sr, 10000, 14000) // top air
+        };
+
+        const rel = {};
+        for (const k of Object.keys(bands)) rel[k] = bands[k] - mid;
+
+        // Target windows: relative to mid (dB). Balanced club/pop instrumental.
+        // Correct only outside the window.
+        const corr = {
+            sub:   bandCorrection(rel.sub,  -4.0,  6.0, 6.0, 2.5),
+            kick:  bandCorrection(rel.kick, -3.5,  5.5, 7.0, 2.0),
+            body:  bandCorrection(rel.body, -4.0,  4.5, 4.5, 2.0),
+            mud:   bandCorrection(rel.mud,  -5.0,  2.5, 1.5, 3.5), // mostly cut mud
+            chord: bandCorrection(rel.chord,-4.5,  3.5, 3.5, 2.0),
+            harm:  bandCorrection(rel.harm, -4.0,  3.0, 3.0, 2.0),
+            pres:  bandCorrection(rel.pres, -5.0,  3.5, 3.0, 2.5),
+            hat:   bandCorrection(rel.hat,  -7.0,  4.0, 4.0, 3.5),
+            air:   bandCorrection(rel.air,  -9.0,  3.0, 3.0, 2.5)
+        };
+
+        // Prefer not to boost mud; if mud correction is positive, shrink it
+        if (corr.mud > 0) corr.mud *= 0.35;
+
+        let maxAbs = 0;
+        for (const k of Object.keys(corr)) maxAbs = Math.max(maxAbs, Math.abs(corr[k]));
+        const needed = maxAbs >= 0.55;
+
+        return { bands, rel, corr, midDb: mid, needed, fullDb: rmsDbOf(slice) };
+    }
+
+    /**
+     * Apply only the corrections analysis asked for.
+     * Covers kick → chords → hats, not just low end.
+     */
+    function enhanceBeat(channels, sr, options) {
+        const o = Object.assign({ strength: 1, maxBoostDb: 7.5, protectLows: true }, options || {});
+        const analysis = analyzeBeat(channels, sr);
+        const report = [];
+        const c = analysis.corr;
+
+        const scale = (v) => {
+            const s = v * o.strength;
+            if (s > 0) return Math.min(o.maxBoostDb, s);
+            return -Math.min(4, -s);
+        };
+
+        const g = {
+            sub: scale(c.sub),
+            kick: scale(c.kick),
+            body: scale(c.body),
+            mud: scale(c.mud),
+            chord: scale(c.chord),
+            harm: scale(c.harm),
+            pres: scale(c.pres),
+            hat: scale(c.hat),
+            air: scale(c.air)
+        };
+
+        // The target windows assume a balanced pop/club beat. Afrobeats, Amapiano and
+        // similar styles carry deliberately heavy sub, log drum and kick, so the engine
+        // may only lift a thin low end, never cut a strong one.
+        if (o.protectLows) {
+            g.sub = Math.max(0, g.sub);
+            g.kick = Math.max(0, g.kick);
+            g.body = Math.max(0, g.body);
+        }
+
+        if (!analysis.needed) {
+            report.push("Beat balance already sits well across kick, chords, and highs — left the instrumental alone.");
+            return { channels, report, analysis: Object.assign({}, analysis, { gains: g }) };
+        }
+
+        const filters = [];
+
+        // --- Lows / drums ---
+        if (Math.abs(g.sub) >= 0.45) {
+            filters.push(design.lowShelf(55, g.sub * 0.9, sr));
+        }
+        if (Math.abs(g.kick) >= 0.45) {
+            filters.push(design.peaking(62, g.kick * 0.7, 0.9, sr));
+            if (g.kick > 0) filters.push(design.lowShelf(75, g.kick * 0.35, sr));
+        }
+        if (Math.abs(g.body) >= 0.45) {
+            filters.push(design.peaking(120, g.body, 0.8, sr));
+        }
+
+        // --- Low-mid mud vs chord body ---
+        if (Math.abs(g.mud) >= 0.45) {
+            filters.push(design.peaking(280, g.mud, 0.85, sr));
+        }
+        if (Math.abs(g.chord) >= 0.45) {
+            // harmonic / chord body — makes progressions feel fuller
+            filters.push(design.peaking(480, g.chord * 0.85, 0.7, sr));
+            filters.push(design.peaking(650, g.chord * 0.5, 0.9, sr));
+        }
+        if (Math.abs(g.harm) >= 0.45) {
+            filters.push(design.peaking(1000, g.harm, 0.75, sr));
+        }
+
+        // --- Presence / attack ---
+        if (Math.abs(g.pres) >= 0.45) {
+            filters.push(design.peaking(2800, g.pres, 0.8, sr));
+        }
+
+        // --- Hi-hats & air ---
+        if (Math.abs(g.hat) >= 0.45) {
+            filters.push(design.peaking(8000, g.hat, 0.7, sr));
+        }
+        if (Math.abs(g.air) >= 0.45) {
+            filters.push(design.highShelf(11000, g.air * 0.85, sr));
+        }
+
+        if (!filters.length) {
+            report.push("Beat balance already sits well across kick, chords, and highs — left the instrumental alone.");
+            return { channels, report, analysis: Object.assign({}, analysis, { gains: g }) };
+        }
+
+        const beforePeak = peakAbs(channels);
+        let out = channels.map((ch) => runCascade(ch, filters));
+        const afterPeak = peakAbs(out);
+
+        if (afterPeak > 1e-6 && beforePeak > 1e-6) {
+            const rise = afterPeak / beforePeak;
+            if (rise > 1.22) {
+                const sc = 1.22 / rise;
+                out = out.map((ch) => {
+                    const y = new Float32Array(ch.length);
+                    for (let i = 0; i < ch.length; i++) y[i] = ch[i] * sc;
+                    return y;
+                });
+            }
+        }
+
+        const line = (label, val, detail) => {
+            if (Math.abs(val) < 0.5) return;
+            const dir = val > 0 ? "lifted" : "eased";
+            report.push(`${label}: ${dir} ${Math.abs(val).toFixed(1)} dB${detail ? " (" + detail + ")" : ""}.`);
+        };
+
+        line("Sub / 808 weight", g.sub, "floor");
+        line("Kick", g.kick, "thump");
+        line("Punch", g.body, "~120 Hz");
+        line("Low-mid mud", g.mud, "~280 Hz");
+        line("Chord body", g.chord, "progressions / pads");
+        line("Harmonic mid", g.harm, "definition");
+        line("Presence", g.pres, "attack & edge");
+        line("Hi-hats", g.hat, "6–10 kHz");
+        line("Air", g.air, "top");
+
+        if (!report.length) {
+            report.push("Checked the full beat spectrum — no meaningful changes needed.");
+        } else {
+            report.unshift("Balanced the instrumental across the spectrum (only bands that needed it):");
+        }
+
+        return { channels: out, report, analysis: Object.assign({}, analysis, { gains: g }) };
+    }
+
     return {
         fft, design, biquadMagDb, runBiquad, runCascade,
         highPass, deEss, bandSpectrum, planEq, applyEq, saturate,
         prepareVocal, finishVocal,
         makeReverbIR, makeEcho, duckCurve, applyDuck, levelBelowVocal,
         glue, limiter, truePeakDb, master,
+        analyzeBeat, enhanceBeat,
         BAND_CENTRES, TARGET_DB, EQ_LIMITS
     };
 }
@@ -956,7 +1210,15 @@ if (typeof window !== "undefined") {
         return engine.master(channels, sr, Object.assign({ meter }, options || {}));
     }
 
-    window.VocalVaultStudio = { engine, prepareVocal, finishVocal, renderFx, master };
+    function enhanceBeat(buffer, options) {
+        const ch = channelsOf(buffer);
+        const r = engine.enhanceBeat(ch, buffer.sampleRate, options);
+        const out = new AudioBuffer({ numberOfChannels: r.channels.length, length: r.channels[0].length, sampleRate: buffer.sampleRate });
+        for (let c = 0; c < r.channels.length; c++) out.copyToChannel(r.channels[c], c);
+        return { buffer: out, report: r.report, analysis: r.analysis };
+    }
+
+    window.VocalVaultStudio = { engine, prepareVocal, finishVocal, renderFx, master, enhanceBeat };
 }
 
 if (typeof module !== "undefined") {

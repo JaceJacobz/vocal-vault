@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Vocal Vault</title>
-    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="logo-mark.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="logo.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <link rel="stylesheet" href="style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -365,13 +365,13 @@
             </div>
             <div class="tune-row">
                 <label for="tune-retune">Retune speed</label>
-                <strong id="tune-retune-value">Instant</strong>
-                <input type="range" id="tune-retune" class="tune-slider" min="0" max="150" value="0" step="5">
+                <strong id="tune-retune-value">25 ms</strong>
+                <input type="range" id="tune-retune" class="tune-slider" min="0" max="150" value="25" step="5">
             </div>
             <div class="tune-row">
                 <label for="tune-flatten">Flatten vibrato</label>
-                <strong id="tune-flatten-value">100%</strong>
-                <input type="range" id="tune-flatten" class="tune-slider" min="0" max="100" value="100" step="5">
+                <strong id="tune-flatten-value">40%</strong>
+                <input type="range" id="tune-flatten" class="tune-slider" min="0" max="100" value="40" step="5">
             </div>
             <div class="tune-row">
                 <label for="tune-shift">Move the whole vocal</label>
@@ -387,10 +387,18 @@
                 </span>
             </label>
 
+            <label class="tune-check">
+                <input type="checkbox" id="tune-selective" checked>
+                <span>
+                    Selective — only fix notes that are clearly off
+                    <small>Near-perfect notes stay as sung. Best for a natural result at high strength.</small>
+                </span>
+            </label>
+
             <p class="nudge-hint">
-                Strength 100% snaps every note onto the scale. Lower values pull partway.
-                Retune speed: lower is tighter, higher is smoother.
-                Flatten vibrato: 0% keeps it, 100% holds each note straight.
+                Strength controls how far off notes are pulled. Selective leaves notes alone when they are already close.
+                Retune speed: lower is tighter, higher is smoother (25 ms is a solid default).
+                Flatten vibrato: 0% keeps it, 100% holds each note straight — keep lower for natural long notes.
             </p>
         </div>
 
@@ -497,8 +505,35 @@
 
         <div class="mix-options">
             <div class="mix-option">
+                <label for="mix-style">Style</label>
+                <select id="mix-style" aria-describedby="mix-style-hint">
+                    <option value="universal" selected>Universal</option>
+                    <option value="afrobeats">Afrobeats / Amapiano</option>
+                    <option value="trap">Trap / Drill</option>
+                    <option value="rnb">R&amp;B / Melodic</option>
+                    <option value="clean">Clean / Natural</option>
+                </select>
+                <small id="mix-style-hint" class="mix-hint">Production character for the whole mix</small>
+            </div>
+            <div class="mix-option">
+                <label for="mix-polish">Polish</label>
+                <select id="mix-polish">
+                    <option value="natural">Natural</option>
+                    <option value="radio" selected>Radio</option>
+                    <option value="aggressive">Aggressive</option>
+                </select>
+                <small class="mix-hint">How hard presence, warmth, and compression push</small>
+            </div>
+            <div class="mix-option">
                 <label for="master-target">Loudness target</label>
                 <select id="master-target"></select>
+            </div>
+            <div class="mix-option">
+                <label class="mix-check" for="beat-enhance">
+                    <input type="checkbox" id="beat-enhance" checked>
+                    Auto-enhance beat
+                </label>
+                <small class="mix-hint">Balances kick, hats, chords &amp; tone only where the beat needs it</small>
             </div>
             <div class="mix-option">
                 <label for="export-format">Export</label>
@@ -615,6 +650,9 @@
                     <label class="tr-countin" title="1-bar count-in before record">
                         <input type="checkbox" id="tr-countin" checked> Count-in
                     </label>
+                    <label class="tr-countin" title="Disable noise suppression / AGC (can be hissy on laptop mics)">
+                        <input type="checkbox" id="tr-raw-mic"> Raw mic
+                    </label>
                     <div class="tr-meter" title="Input level"><div id="tr-meter-fill" class="tr-meter-fill"></div></div>
                     <span id="tr-status" class="tr-status">Ready</span>
                     <span id="track-count-label" class="tr-count">0 / 20</span>
@@ -631,6 +669,7 @@
 <script src="studio.js"></script>
 <script src="fxplus.js"></script>
 <script src="levelmatch.js"></script>
+<script src="presets.js"></script>
 <script src="automix.js"></script>
 <script src="prep.js"></script>
 <script src="tune.js"></script>

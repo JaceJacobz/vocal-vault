@@ -2039,7 +2039,20 @@ function showVocalTempo() {
                 }
 
                 // Pass the full accumulated state to automix.js
-                const mixedBuffer = await window.VocalVaultAutomix.process(window.VocalVaultState);
+                const beatEnhance = document.getElementById("beat-enhance")
+                    ? document.getElementById("beat-enhance").checked
+                    : true;
+                const style = document.getElementById("mix-style")
+                    ? document.getElementById("mix-style").value
+                    : "universal";
+                const polishLevel = document.getElementById("mix-polish")
+                    ? document.getElementById("mix-polish").value
+                    : "radio";
+                const mixedBuffer = await window.VocalVaultAutomix.process(window.VocalVaultState, {
+                    beatEnhance,
+                    style,
+                    polishLevel
+                });
 
                 if (autoMixStatus) autoMixStatus.textContent = "Automix complete!";
                 
@@ -2065,7 +2078,7 @@ function showVocalTempo() {
 
             } catch (error) {
                 console.error("Automix failed:", error);
-                if (autoMixStatus) autoMixStatus.textContent = "Automix failed.";
+                if (autoMixStatus) autoMixStatus.textContent = "Automix failed: " + ((error && error.message) || String(error));
             } finally {
                 autoMixButton.disabled = false;
             }

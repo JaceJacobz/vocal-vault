@@ -692,73 +692,124 @@ function createTuneEngine() {
         const raw = new Float32Array(n);
         const info = [];
 
-        // Strength 1 (100%) means FULL correction with no limits at all:
-        // no deadzone, no maximum shift, every note lands exactly on its
-        // target. Below 100% the deadzone and shift cap come back as a
-        // safety net, and the pull toward the target is scaled down.
+        // Strength scales how far we pull. Selective mode (default on) only
+        // spends that strength on notes that are clearly off — near-center
+        // notes stay put so the result stays human even at 100% strength.
         const strength = Math.max(0, Math.min(1, o.strength === undefined ? 1 : o.strength));
-        const full = strength >= 1;
+        const selective = o.selective !== false;
+        const selectThresh = o.selectiveCents != null ? o.selectiveCents : 22;   // leave alone if closer than this
+        const selectSoft = o.selectiveSoftCents != null ? o.selectiveSoftCents : 48; // full pull above this
+        // When selective is off and strength is 100%, legacy "snap everything" path.
+        const full = !selective && strength >= 1;
 
         const hopSec = track.hop / track.sampleRate;
         const smart = (o.smart !== false && !o.chromatic) ? smartTargets(notes, hopSec, o) : null;
 
-        // Notes shorter than this keep the old centre-based correction (natural for
-        // short syllables). Longer notes (held vowels like "ohhh") are corrected
-        // frame-by-frame so pitch drift across the note is fixed, not only the median.
-        const longNoteFrames = Math.ceil(0.35 / hopSec);   // ~350 ms
+        // Held vowels ("ohhh"): frame-level correction with a stable blend so
+        // the note does not warble as the tracker jitters.
+        const longNoteFrames = Math.ceil(0.28 / hopSec);   // ~280 ms
+
+        let skipped = 0, partial = 0, corrected = 0;
 
         for (let ni = 0; ni < notes.length; ni++) {
 
             const nt = notes[ni];
-            const move = o.transposeTotal || 0;          // whole-vocal move in semitones, always applied in full
+            const move = o.transposeTotal || 0;
             const target = smart
                 ? smart.targets[ni]
                 : nearestNote(nt.center - ref + move, o.rootPc, mask, o.chromatic) + ref;
 
-            // Centre residual: used for short notes and for the report.
-            let resid = (target - (nt.center + move)) * 100;
+            // Centre error before strength / selective (cents)
+            const errCents = (target - (nt.center + move)) * 100;
+            const absErr = Math.abs(errCents);
+
+            // How hard this note is pulled (0 = leave, 1 = full strength)
+            let notePull = 1;
+            if (selective) {
+                if (absErr < selectThresh) notePull = 0;
+                else if (absErr < selectSoft) {
+                    // smoothstep between thresh and soft
+                    const t = (absErr - selectThresh) / Math.max(1e-6, selectSoft - selectThresh);
+                    notePull = t * t * (3 - 2 * t);
+                }
+            }
+
+            if (notePull <= 0.02) skipped++;
+            else if (notePull < 0.95) partial++;
+            else corrected++;
+
+            let resid = errCents;
+            const dead = full ? 0 : (o.deadzone || 8);
+            const cap = full ? 9999 : (o.maxShift || 180);
 
             if (!full) {
-                if (Math.abs(resid) < (o.deadzone || 0)) resid = 0;
-                const cap = o.maxShift || 150;
+                if (Math.abs(resid) < dead) resid = 0;
                 resid = Math.max(-cap, Math.min(cap, resid));
-                resid *= strength;
             }
-            const offset = move * 100 + resid;
+            resid *= strength * notePull;
 
+            const offset = move * 100 + resid;
             const isLong = (nt.end - nt.start) >= longNoteFrames;
+            // Quadratic flatten on long notes: 50% UI feels milder, 100% still straight
             const flatten = Math.max(0, Math.min(1, o.flatten === undefined ? 0.2 : o.flatten));
-            const dead = full ? 0 : (o.deadzone || 0);
-            const cap = full ? 9999 : (o.maxShift || 150);
+            const longFlatten = isLong ? (flatten * flatten) : flatten;
 
             for (let k = nt.start; k < nt.end; k++) {
                 if (isNaN(track.midi[k])) continue;
 
-                if (isLong) {
-                    // Frame-level: pull THIS sample toward the target so a drifting
-                    // "ohhh" is corrected all the way through, not only at its centre.
+                if (isLong && notePull > 0.02) {
+                    // Blend frame error with centre error so tracker noise does not
+                    // get written into the shift curve (the "warble on ohhh" fix).
                     let frameResid = (target - (track.midi[k] + move)) * 100;
+                    const centerResid = errCents;
+                    frameResid = 0.5 * frameResid + 0.5 * centerResid;
                     if (Math.abs(frameResid) < dead) frameResid = 0;
                     frameResid = Math.max(-cap, Math.min(cap, frameResid));
-                    if (!full) frameResid *= strength;
-                    // flatten still removes vibrato; when flatten is low the singer's
-                    // micro-wiggle around the target is kept.
+                    frameResid *= strength * notePull;
                     const drift = (track.midi[k] - nt.center) * 100;
-                    raw[k] = move * 100 + frameResid - flatten * drift * (1 - Math.min(1, Math.abs(frameResid) / 80));
+                    // Keep more natural vibrato when the note only needs a small pull
+                    const flatAmt = longFlatten * (0.35 + 0.65 * notePull);
+                    raw[k] = move * 100 + frameResid - flatAmt * drift * (1 - Math.min(1, Math.abs(frameResid) / 90));
+                } else if (isLong && notePull <= 0.02) {
+                    // Selective skip: only global transpose, keep singer's shape
+                    raw[k] = move * 100;
                 } else {
                     const drift = (track.midi[k] - nt.center) * 100;
-                    raw[k] = offset - flatten * drift;
+                    const flatAmt = flatten * (0.35 + 0.65 * Math.max(notePull, notePull <= 0.02 ? 0 : 1));
+                    if (notePull <= 0.02) {
+                        raw[k] = move * 100;
+                    } else {
+                        raw[k] = offset - flatAmt * drift;
+                    }
                 }
             }
 
-            info.push({ start: nt.start, end: nt.end, center: nt.center, target, offsetCents: offset });
+            info.push({
+                start: nt.start,
+                end: nt.end,
+                center: nt.center,
+                target,
+                offsetCents: offset,
+                errorCents: errCents,
+                pull: notePull,
+                long: isLong
+            });
         }
 
+        // Retune smoothing: never fully "instant" on long material — a small
+        // floor removes zipper/robot steps while still feeling tight.
+        let retuneMs = o.retuneMs || 0;
+        if (o.minRetuneMs != null) retuneMs = Math.max(retuneMs, o.minRetuneMs);
+        else if (selective) retuneMs = Math.max(retuneMs, 12);
+        // Extra glide when many long notes were pulled hard
+        if (corrected + partial > 0 && retuneMs < 18) retuneMs = Math.max(retuneMs, 16);
+
         return {
-            shift: smoothRuns(raw, track.midi, hopMs, o.retuneMs),
+            shift: smoothRuns(raw, track.midi, hopMs, retuneMs),
             notes: info,
             biasCents: smart ? smart.biasCents : 0,
-            ambiguous: smart ? smart.ambiguous : 0
+            ambiguous: smart ? smart.ambiguous : 0,
+            selective: { skipped, partial, corrected, thresh: selectThresh, soft: selectSoft }
         };
     }
 
@@ -1165,7 +1216,7 @@ function createTuneEngine() {
 
         const o = Object.assign({
             rootPc: 0, scale: "major", refCents: 0,
-            strength: 1, flatten: 0.2, retuneMs: 20,
+            strength: 1, flatten: 0.35, retuneMs: 25, selective: true, selectiveCents: 22, selectiveSoftCents: 48,
             deadzone: 5, maxShift: 150, chromatic: false,
             testDetune: false, seed: 7
         }, options || {});
@@ -1225,9 +1276,14 @@ function createTuneEngine() {
         result.hop = track.hop;
         result.sampleRate = sr;
         result.notes = plan.notes.length;
-        result.corrected = plan.notes.filter(n => Math.abs(n.offsetCents) >= 15).length;   // audible moves only
+        // Notes that were actually pulled (selective pull > ~0, or legacy offset)
+        result.corrected = plan.notes.filter(n => {
+            if (n.pull != null) return n.pull > 0.05 && Math.abs(n.offsetCents - (o.transposeTotal || 0) * 100) >= 8;
+            return Math.abs(n.offsetCents) >= 15;
+        }).length;
         result.biasCents = plan.biasCents;
         result.ambiguousNotes = plan.ambiguous;
+        result.selective = plan.selective || null;
 
         progress(1, "Done");
         return result;
