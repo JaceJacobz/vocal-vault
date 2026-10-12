@@ -147,71 +147,133 @@ function createStudioEngine() {
 
     function deEss(channels, sr, options) {
 
-        const o = Object.assign({ freq: 5000, ratio: 4, maxCutDb: 8, aboveMedianDb: 8 }, options || {});
+        // Smarter de-ess: only when highs spike *relative to the voice*, and
+        // never so often that the whole take goes dull.
+        const o = Object.assign({
+            freq: 5200,
+            ratio: 3.5,
+            maxCutDb: 7,
+            aboveMedianDb: 6.5,
+            maxActivePct: 18
+        }, options || {});
         const n = channels[0].length;
 
-        // Linkwitz-Riley crossover (two matched 2nd-order filters each side): the
-        // low and high bands sum flat, so turning the top band down is a smooth
-        // cut with no bump at the split. The high band is where "s" lives.
+        // Linkwitz-Riley: low + high sum flat; only high band is reduced.
         const hpSplit = [design.highpass(o.freq, sr), design.highpass(o.freq, sr)];
         const lpSplit = [design.lowpass(o.freq, sr), design.lowpass(o.freq, sr)];
         const highs = channels.map((x) => runCascade(x, hpSplit));
 
-        // One detector for all channels, so the stereo image never wobbles.
-        const att = Math.exp(-1 / (0.0005 * sr)), rel = Math.exp(-1 / (0.02 * sr));
-        const env = new Float32Array(n);
-        let e = 0;
+        // Presence band detector (~2–4 kHz) so we know "s" vs bright singing
+        const presHp = [design.highpass(2000, sr), design.highpass(2000, sr)];
+        const presLp = [design.lowpass(4000, sr), design.lowpass(4000, sr)];
+        const presence = channels.map((x) => runCascade(runCascade(x, presHp), presLp));
+
+        // Fast attack / slower release on the sibilance envelope
+        const att = Math.exp(-1 / (0.0004 * sr));
+        const rel = Math.exp(-1 / (0.035 * sr));
+        const envS = new Float32Array(n);
+        const envP = new Float32Array(n);
+        let eS = 0, eP = 0;
         for (let i = 0; i < n; i++) {
-            let a = 0;
-            for (const h of highs) { const v = h[i] < 0 ? -h[i] : h[i]; if (v > a) a = v; }
-            e = a > e ? att * e + (1 - att) * a : rel * e + (1 - rel) * a;
-            env[i] = e;
+            let aS = 0, aP = 0;
+            for (const h of highs) { const v = h[i] < 0 ? -h[i] : h[i]; if (v > aS) aS = v; }
+            for (const h of presence) { const v = h[i] < 0 ? -h[i] : h[i]; if (v > aP) aP = v; }
+            eS = aS > eS ? att * eS + (1 - att) * aS : rel * eS + (1 - rel) * aS;
+            eP = aP > eP ? att * eP + (1 - att) * aP : rel * eP + (1 - rel) * aP;
+            envS[i] = eS;
+            envP[i] = eP;
         }
 
-        // How loud is that band when the singer is singing? Its typical (median)
-        // level is the vocal's own baseline; only what rises well above it is an "s".
-        // (A percentile would depend on how often "s" occurs; the median does not.)
-        const frame = Math.round(0.005 * sr), levels = [];
+        const frame = Math.round(0.005 * sr);
+        const levels = [];
+        const ratios = [];
         let peakAll = 0;
         for (const x of channels) for (let i = 0; i < n; i++) peakAll = Math.max(peakAll, Math.abs(x[i]));
-        const activeGate = peakAll * 0.03;                       // about -30 dB from the loudest peak
+        const activeGate = peakAll * 0.03;
 
         for (let i = 0; i + frame <= n; i += frame) {
-            let pk = 0, band = 0;
+            let pk = 0, bandS = 0, bandP = 0;
             for (let k = i; k < i + frame; k++) {
                 for (const x of channels) { const v = Math.abs(x[k]); if (v > pk) pk = v; }
-                if (env[k] > band) band = env[k];
+                if (envS[k] > bandS) bandS = envS[k];
+                if (envP[k] > bandP) bandP = envP[k];
             }
-            if (pk >= activeGate) levels.push(20 * Math.log10(Math.max(band, 1e-9)));
+            if (pk >= activeGate) {
+                levels.push(20 * Math.log10(Math.max(bandS, 1e-9)));
+                ratios.push(bandS / Math.max(bandP, 1e-9));
+            }
         }
 
         const result = { thresholdDb: null, maxCutDb: 0, percentTimeActive: 0, applied: false, channels };
         if (levels.length < 20) return result;
 
         levels.sort((p, q) => p - q);
+        ratios.sort((p, q) => p - q);
         const median = levels[levels.length >> 1];
-        const threshold = median + o.aboveMedianDb;
+        const ratioMed = ratios[ratios.length >> 1];
+        const ratioHi = ratios[Math.min(ratios.length - 1, Math.floor(ratios.length * 0.85))];
+
+        // Adaptive threshold: bright-but-smooth voices get a higher bar;
+        // spiky "s"-heavy takes get a lower one.
+        let above = o.aboveMedianDb;
+        if (ratioHi > ratioMed * 2.2) above = Math.max(5, above - 1.5);  // clear sibilance spikes
+        else if (ratioHi < ratioMed * 1.35) above = above + 2;           // already smooth — do less
+
+        let threshold = median + above;
         result.thresholdDb = threshold;
 
         const slope = 1 - 1 / o.ratio;
-        const gain = new Float32Array(n);
-        let maxCut = 0, active = 0;
 
+        // First pass: measure how often we would cut
+        let activeCount = 0;
+        const rawCut = new Float32Array(n);
         for (let i = 0; i < n; i++) {
-            const d = 20 * Math.log10(Math.max(env[i], 1e-9)) - threshold;
-            const cut = d > 0 ? Math.min(o.maxCutDb, d * slope) : 0;
-            gain[i] = Math.pow(10, -cut / 20);
-            if (cut > maxCut) maxCut = cut;
-            if (cut > 0.5) active++;
+            const d = 20 * Math.log10(Math.max(envS[i], 1e-9)) - threshold;
+            // Also require highs elevated vs presence (true "s", not just loud bright vowel)
+            const ratio = envS[i] / Math.max(envP[i], 1e-9);
+            const ratioOk = ratio >= Math.max(0.55, ratioMed * 0.9);
+            let cut = (d > 0 && ratioOk) ? Math.min(o.maxCutDb, d * slope) : 0;
+            rawCut[i] = cut;
+            if (cut > 0.5) activeCount++;
+        }
+
+        // If too much of the take would be cut, raise threshold and recompute
+        const activePct = 100 * activeCount / n;
+        if (activePct > o.maxActivePct) {
+            const bump = Math.min(6, (activePct - o.maxActivePct) * 0.25);
+            threshold += bump;
+            result.thresholdDb = threshold;
+            activeCount = 0;
+            for (let i = 0; i < n; i++) {
+                const d = 20 * Math.log10(Math.max(envS[i], 1e-9)) - threshold;
+                const ratio = envS[i] / Math.max(envP[i], 1e-9);
+                const ratioOk = ratio >= Math.max(0.55, ratioMed * 0.9);
+                let cut = (d > 0 && ratioOk) ? Math.min(o.maxCutDb, d * slope) : 0;
+                rawCut[i] = cut;
+                if (cut > 0.5) activeCount++;
+            }
+        }
+
+        // Smooth gain so cuts don't click or pump
+        const gAtt = 1 - Math.exp(-1 / (0.003 * sr));
+        const gRel = 1 - Math.exp(-1 / (0.04 * sr));
+        const gain = new Float32Array(n);
+        let g = 1, maxCut = 0, active = 0;
+        for (let i = 0; i < n; i++) {
+            const want = Math.pow(10, -rawCut[i] / 20);
+            g += (want < g ? gAtt : gRel) * (want - g);
+            gain[i] = g;
+            const cutNow = -20 * Math.log10(Math.max(g, 1e-6));
+            if (cutNow > maxCut) maxCut = cutNow;
+            if (cutNow > 0.5) active++;
         }
 
         result.maxCutDb = maxCut;
         result.percentTimeActive = 100 * active / n;
-        result.applied = maxCut > 0.5;
+        result.applied = maxCut > 0.6;
 
         if (!result.applied) return result;
 
-        // out = low band (untouched) + high band * gain
         result.channels = channels.map((x, c) => {
             const out = runCascade(x, lpSplit), h = highs[c];
             for (let i = 0; i < n; i++) out[i] += h[i] * gain[i];
@@ -219,6 +281,278 @@ function createStudioEngine() {
         });
 
         return result;
+    }
+
+    // ---------------------------------------------------------
+    // 2a. Adaptive de-grind — only when the SOURCE take is already gritty
+    // Detects harsh mid-high roughness on voiced frames. Clean takes: no-op.
+    // Grindy phone/mic takes: mild dynamic cut in the "grind" band only.
+    // ---------------------------------------------------------
+
+    function deGrind(channels, sr, options) {
+        // Two jobs, only when the take already has them:
+        //  1) Strain (singer pushing) — harsh 1.6–3.5 kHz that mastering makes obvious
+        //  2) Grind — rough 3–6.5 kHz texture
+        // Clean takes: no-op.
+        const o = Object.assign({
+            strainLowHz: 1600,
+            strainHighHz: 3500,
+            grindLowHz: 3200,
+            grindHighHz: 6500,
+            maxStrainCutDb: 4.5,
+            maxGrindCutDb: 5.0,
+            minScore: 0.32,
+            maxActivePct: 40
+        }, options || {});
+
+        const n = channels[0].length;
+        if (n < sr * 0.4) return { channels, applied: false, score: 0 };
+
+        const hop = Math.max(1, Math.round(0.01 * sr));
+        const frames = Math.ceil(n / hop);
+
+        function bandpass(x, lo, hi) {
+            return runCascade(runCascade(x, [design.highpass(lo, sr), design.highpass(lo, sr)]),
+                [design.lowpass(hi, sr), design.lowpass(hi, sr)]);
+        }
+
+        const mono = new Float32Array(n);
+        for (let c = 0; c < channels.length; c++) {
+            const x = channels[c];
+            for (let i = 0; i < n; i++) mono[i] += x[i] / channels.length;
+        }
+
+        const strainCh = channels.map((x) => bandpass(x, o.strainLowHz, o.strainHighHz));
+        const grindCh = channels.map((x) => bandpass(x, o.grindLowHz, o.grindHighHz));
+        const bodyCh = channels.map((x) => bandpass(x, 250, 1200));
+
+        const sRms = new Float32Array(frames);
+        const gRms = new Float32Array(frames);
+        const bRms = new Float32Array(frames);
+        const zcr = new Float32Array(frames);
+
+        for (let f = 0; f < frames; f++) {
+            const a = f * hop, b = Math.min(n, a + hop);
+            let es = 0, eg = 0, eb = 0, zc = 0, prev = 0, cnt = 0;
+            for (let i = a; i < b; i++) {
+                let sv = 0, gv = 0, bv = 0;
+                for (let c = 0; c < channels.length; c++) {
+                    sv += strainCh[c][i];
+                    gv += grindCh[c][i];
+                    bv += bodyCh[c][i];
+                }
+                const inv = 1 / channels.length;
+                sv *= inv; gv *= inv; bv *= inv;
+                es += sv * sv; eg += gv * gv; eb += bv * bv;
+                const v = mono[i];
+                if (i > a && ((prev >= 0 && v < 0) || (prev < 0 && v >= 0))) zc++;
+                prev = v;
+                cnt++;
+            }
+            const len = Math.max(1, cnt);
+            sRms[f] = Math.sqrt(es / len);
+            gRms[f] = Math.sqrt(eg / len);
+            bRms[f] = Math.sqrt(eb / len);
+            zcr[f] = zc / len;
+        }
+
+        const bodySorted = Float32Array.from(bRms).sort();
+        const bodyLoud = bodySorted[Math.min(frames - 1, Math.floor(frames * 0.85))] || 1e-6;
+        const gate = bodyLoud * 0.1;
+
+        let scoreSum = 0, scoreN = 0, hot = 0;
+        for (let f = 0; f < frames; f++) {
+            if (bRms[f] < gate) continue;
+            const strainRatio = sRms[f] / Math.max(bRms[f], 1e-9);
+            const grindRatio = gRms[f] / Math.max(bRms[f], 1e-9);
+            // Strain reads as hot mids even without high ZCR; grind is noisier
+            const strainPart = Math.min(1, Math.max(0, strainRatio - 0.45) * 2.2);
+            const grindPart = Math.min(1, Math.max(0, grindRatio - 0.35) * 2.0) * (zcr[f] > 0.12 ? 1 : 0.55);
+            const frameScore = Math.min(1, 0.55 * strainPart + 0.45 * grindPart);
+            scoreSum += frameScore;
+            scoreN++;
+            if (frameScore > 0.4) hot++;
+        }
+        const score = scoreN ? scoreSum / scoreN : 0;
+        if (score < o.minScore || hot < 5) {
+            return { channels, applied: false, score: Math.round(score * 100) / 100 };
+        }
+
+        const strength = Math.min(1, (score - o.minScore) / 0.4);
+        const maxStrain = o.maxStrainCutDb * (0.5 + 0.5 * strength);
+        const maxGrind = o.maxGrindCutDb * (0.45 + 0.55 * strength);
+
+        // Dynamic gains for each band
+        const att = 1 - Math.exp(-hop / (0.01 * sr));
+        const rel = 1 - Math.exp(-hop / (0.06 * sr));
+        let gS = 1, gG = 1, peakCut = 0, active = 0;
+        const gainS = new Float32Array(n);
+        const gainG = new Float32Array(n);
+
+        for (let f = 0; f < frames; f++) {
+            let wantS = 1, wantG = 1;
+            if (bRms[f] >= gate) {
+                const sr_ = sRms[f] / Math.max(bRms[f], 1e-9);
+                const gr_ = gRms[f] / Math.max(bRms[f], 1e-9);
+                if (sr_ > 0.55) {
+                    const excess = (sr_ - 0.55) / 0.6;
+                    const cutDb = Math.min(maxStrain, excess * maxStrain);
+                    wantS = Math.pow(10, -cutDb / 20);
+                    if (cutDb > peakCut) peakCut = cutDb;
+                    if (cutDb > 0.4) active++;
+                }
+                if (gr_ > 0.4 && zcr[f] > 0.1) {
+                    const excess = (gr_ - 0.4) / 0.7;
+                    const cutDb = Math.min(maxGrind, excess * maxGrind);
+                    wantG = Math.pow(10, -cutDb / 20);
+                    if (cutDb > peakCut) peakCut = cutDb;
+                    if (cutDb > 0.4) active++;
+                }
+            }
+            gS += (wantS < gS ? att : rel) * (wantS - gS);
+            gG += (wantG < gG ? att : rel) * (wantG - gG);
+            const a = f * hop, b = Math.min(n, a + hop);
+            for (let i = a; i < b; i++) { gainS[i] = gS; gainG[i] = gG; }
+        }
+
+        if (peakCut < 0.7) {
+            return { channels, applied: false, score: Math.round(score * 100) / 100 };
+        }
+        if ((100 * active / Math.max(1, frames)) > o.maxActivePct) {
+            return { channels, applied: false, score: Math.round(score * 100) / 100, skipped: "would dull take" };
+        }
+
+        // Rebuild: low (<strain) + strained mid * gainS + grind mid * gainG + air (>grind high)
+        // Simpler: start from full signal, subtract (1-gain)*band for each
+        const out = channels.map((x, c) => {
+            const y = new Float32Array(n);
+            for (let i = 0; i < n; i++) {
+                const s = strainCh[c][i];
+                const g = grindCh[c][i];
+                // Remove full strain/grind bands, add back attenuated
+                // Avoid double-counting overlap 3.2–3.5k by weighting
+                y[i] = x[i] - s * (1 - gainS[i]) - g * (1 - gainG[i]) * 0.85;
+            }
+            return y;
+        });
+
+        return {
+            channels: out,
+            applied: true,
+            score: Math.round(score * 100) / 100,
+            maxCutDb: Math.round(peakCut * 10) / 10,
+            kind: "strain+grind"
+        };
+    }
+
+    // ---------------------------------------------------------
+    // 2b. Multiband mud control (low-mid vs presence)
+    // Only turns down the boxy 200–500 Hz region when it is loud
+    // relative to the midrange — never a static “thin the vocal” EQ.
+    // ---------------------------------------------------------
+
+    function multibandClean(channels, sr, options) {
+        const o = Object.assign({
+            lowSplitHz: 400,
+            highSplitHz: 2500,
+            maxCutDb: 5.5,
+            threshDb: 2.5,      // low band may sit this far above mid before cutting
+            ratio: 2.2,
+            openSec: 0.02,
+            closeSec: 0.08
+        }, options || {});
+
+        const n = channels[0].length;
+        if (n < sr * 0.25) return { channels, applied: false, maxCutDb: 0 };
+
+        // Linkwitz-Riley splits: low | mid | high, sum flat when gains are 1
+        const lpLow = [design.lowpass(o.lowSplitHz, sr), design.lowpass(o.lowSplitHz, sr)];
+        const hpLow = [design.highpass(o.lowSplitHz, sr), design.highpass(o.lowSplitHz, sr)];
+        const lpHigh = [design.lowpass(o.highSplitHz, sr), design.lowpass(o.highSplitHz, sr)];
+        const hpHigh = [design.highpass(o.highSplitHz, sr), design.highpass(o.highSplitHz, sr)];
+
+        const lows = channels.map((x) => runCascade(x, lpLow));
+        const rest = channels.map((x) => runCascade(x, hpLow));
+        const mids = rest.map((x) => runCascade(x, lpHigh));
+        const highs = rest.map((x) => runCascade(x, hpHigh));
+
+        // Sidechain from mono low vs mid energy
+        const hop = Math.max(1, Math.round(0.008 * sr));
+        const frames = Math.ceil(n / hop);
+        const lowRms = new Float32Array(frames);
+        const midRms = new Float32Array(frames);
+        for (let f = 0; f < frames; f++) {
+            const a = f * hop, b = Math.min(n, a + hop);
+            let el = 0, em = 0, cnt = 0;
+            for (let i = a; i < b; i++) {
+                let lv = 0, mv = 0;
+                for (let c = 0; c < channels.length; c++) {
+                    lv += lows[c][i];
+                    mv += mids[c][i];
+                }
+                lv /= channels.length;
+                mv /= channels.length;
+                el += lv * lv;
+                em += mv * mv;
+                cnt++;
+            }
+            lowRms[f] = Math.sqrt(el / Math.max(1, cnt));
+            midRms[f] = Math.sqrt(em / Math.max(1, cnt));
+        }
+
+        // Only act on frames that are actually singing (mid has energy)
+        const midSorted = Float32Array.from(midRms).sort();
+        const midLoud = midSorted[Math.min(frames - 1, Math.floor(frames * 0.85))] || 1e-6;
+        const gate = midLoud * 0.08;
+
+        const maxLin = Math.pow(10, -o.maxCutDb / 20);
+        const up = 1 - Math.exp(-hop / (o.openSec * sr));
+        const down = 1 - Math.exp(-hop / (o.closeSec * sr));
+        let g = 1;
+        let peakCutDb = 0;
+        let active = 0;
+        const gain = new Float32Array(n);
+
+        for (let f = 0; f < frames; f++) {
+            let want = 1;
+            if (midRms[f] >= gate && lowRms[f] > 1e-8) {
+                const lowDb = 20 * Math.log10(Math.max(lowRms[f], 1e-12));
+                const midDb = 20 * Math.log10(Math.max(midRms[f], 1e-12));
+                const excess = lowDb - midDb - o.threshDb;
+                if (excess > 0) {
+                    // Soft knee: excess dB → cut toward maxCutDb
+                    const cutDb = Math.min(o.maxCutDb, excess * (o.ratio - 1));
+                    want = Math.pow(10, -cutDb / 20);
+                    if (cutDb > peakCutDb) peakCutDb = cutDb;
+                    active++;
+                }
+            }
+            const alpha = want < g ? down : up;
+            g += alpha * (want - g);
+            // Never go below maxLin
+            if (g < maxLin) g = maxLin;
+            const a = f * hop, b = Math.min(n, a + hop);
+            for (let i = a; i < b; i++) gain[i] = g;
+        }
+
+        // Skip if barely anything needed (don't report noise)
+        if (peakCutDb < 0.8 || active < 4) {
+            return { channels, applied: false, maxCutDb: 0 };
+        }
+
+        const out = channels.map((_, c) => {
+            const y = new Float32Array(n);
+            for (let i = 0; i < n; i++) {
+                y[i] = lows[c][i] * gain[i] + mids[c][i] + highs[c][i];
+            }
+            return y;
+        });
+
+        return {
+            channels: out,
+            applied: true,
+            maxCutDb: Math.round(peakCutDb * 10) / 10
+        };
     }
 
     // ---------------------------------------------------------
@@ -241,7 +575,7 @@ function createStudioEngine() {
     ];
 
     // highCut: above 2 kHz the EQ may only trim a little (harshness is the de-esser's job), so it can never dull a voice.
-    const EQ_LIMITS = { cut: -4.5, boost: 3, shelfCut: 0, shelfBoost: 4, highCut: -0.5, totalBoost: 4.5, totalCut: -6 };
+    const EQ_LIMITS = { cut: -4.5, boost: 3, shelfCut: 0, shelfBoost: 3.5, highCut: -0.5, harshCut: -1.0, totalBoost: 4.2, totalCut: -6 };
 
     // average 1/3-octave band spectrum of the singing, in dB
     function bandSpectrum(channels, sr) {
@@ -299,7 +633,7 @@ function createStudioEngine() {
 
     function planEq(measuredDb, options, sr) {
 
-        const o = Object.assign({ cutStrength: 0.6, boostStrength: 0.4, deadbandDb: 0.8, presenceDb: 1.5, airDb: 2.0 }, options || {});
+        const o = Object.assign({ cutStrength: 0.6, boostStrength: 0.4, deadbandDb: 0.8, presenceDb: 1.35, airDb: 1.75 }, options || {});
         const rate = sr || 44100;
         const refM = referenceLevel(measuredDb), refT = referenceLevel(TARGET_DB);
         const dev = measuredDb.map((v, i) => (v - refM) - (TARGET_DB[i] - refT));   // + = too much energy here
@@ -328,7 +662,11 @@ function createStudioEngine() {
             let g = wanted(around(b.f));
             if (b.f === 3200) g += o.presenceDb;
             if (b.f <= 500 && g > 0) g = 0;                                   // never ADD low-mid body: it makes a voice sound deeper
-            const floor = b.f >= 2000 ? EQ_LIMITS.highCut : EQ_LIMITS.cut;     // never dull the top
+            if (b.f <= 500 && g < 0) g *= 1.2;                                // a bit more willing to cut mud here
+            // Mostly protect the top; only a tiny cut allowed above 5 kHz
+            let floor = EQ_LIMITS.cut;
+            if (b.f >= 5000) floor = EQ_LIMITS.harshCut;
+            else if (b.f >= 2000) floor = EQ_LIMITS.highCut;
             return { f: b.f, Q: b.Q, gainDb: clamp(g, floor, EQ_LIMITS.boost) };
         });
 
@@ -370,17 +708,24 @@ function createStudioEngine() {
     // ---------------------------------------------------------
 
     function saturate(channels, options) {
-        const o = Object.assign({ drive: 2, mix: 0.2 }, options || {});
+        // Soft warmth only — high drive + mix reads as gritty "grind" on the voice.
+        const o = Object.assign({ drive: 1.35, mix: 0.08 }, options || {});
+        const drive = Math.max(1.05, Math.min(2.2, o.drive));
+        const mix = Math.max(0, Math.min(0.22, o.mix));
         return channels.map((x) => {
             const out = new Float32Array(x.length);
             for (let i = 0; i < x.length; i++) {
-                const wet = Math.tanh(o.drive * x[i]) / o.drive;      // gain 1 for small signals
-                out[i] = (1 - o.mix) * x[i] + o.mix * wet;
+                const v = x[i];
+                // Softer than raw tanh(drive*x)/drive — less upper harmonic grit
+                const wet = Math.tanh(drive * v * 0.85) / (drive * 0.85);
+                out[i] = (1 - mix) * v + mix * wet;
             }
             return out;
         });
     }
 
+    // Soft expander: pull down only the quiet floor so hiss/static between
+    // phrases disappears, without the musical noise of heavy spectral denoise.
     // Soft expander: pull down only the quiet floor so hiss/static between
     // phrases disappears, without the musical noise of heavy spectral denoise.
     function phraseGate(channels, sr, options) {
@@ -426,9 +771,9 @@ function createStudioEngine() {
         };
     }
 
-    // Soften breathy regions (moderate energy, not sibilant).
+    // Soften clear inhales between lines — conservative so singing is never ducked.
     function reduceBreaths(channels, sr, options) {
-        const o = Object.assign({ cutDb: 10 }, options || {});
+        const o = Object.assign({ cutDb: 11 }, options || {});
         const n = channels[0].length;
         const hop = Math.max(1, Math.round(0.01 * sr));
         const frames = Math.ceil(n / hop);
@@ -437,38 +782,67 @@ function createStudioEngine() {
             const x = channels[c];
             for (let i = 0; i < n; i++) mono[i] += x[i] / channels.length;
         }
-        const rms = new Float32Array(frames), hf = new Float32Array(frames);
+        const rms = new Float32Array(frames);
+        const zcr = new Float32Array(frames);
         for (let f = 0; f < frames; f++) {
-            let e = 0, d = 0, prev = 0;
+            let e = 0, zc = 0, prev = 0;
             const a = f * hop, b = Math.min(n, a + hop);
             for (let i = a; i < b; i++) {
-                const v = mono[i]; e += v * v;
-                const dv = v - prev; d += dv * dv; prev = v;
+                const v = mono[i];
+                e += v * v;
+                if (i > a && ((prev >= 0 && v < 0) || (prev < 0 && v >= 0))) zc++;
+                prev = v;
             }
             const len = Math.max(1, b - a);
             rms[f] = Math.sqrt(e / len);
-            hf[f] = e > 1e-12 ? Math.min(1, Math.sqrt(d / e) / 2) : 0;
+            zcr[f] = zc / len;
         }
         const sorted = Float32Array.from(rms).sort();
-        const floor = sorted[Math.floor(frames * 0.08)] || 1e-6;
-        const loud = sorted[Math.floor(frames * 0.9)] || floor * 10;
+        const floor = sorted[Math.max(0, Math.floor(frames * 0.08))] || 1e-6;
+        const loud = sorted[Math.min(frames - 1, Math.floor(frames * 0.9))] || floor * 10;
         if (loud < floor * 4) return { channels, applied: false };
+
+        // Only moderate energy: above floor, well under sung level
+        const lo = Math.max(floor * 2.5, loud * 0.04);
+        const hi = Math.min(loud * 0.28, lo * 8);
+
         const mark = new Float32Array(frames);
         for (let f = 0; f < frames; f++) {
-            if (rms[f] >= floor * 2.2 && rms[f] <= loud * 0.32 && hf[f] < 0.55) mark[f] = 1;
+            // Must look like air noise (high zero-crossings), not a vowel
+            if (rms[f] >= lo && rms[f] <= hi && zcr[f] >= 0.12) mark[f] = 1;
         }
+
+        // Keep runs 60 ms – 700 ms only
+        const minF = Math.max(2, Math.round(0.06 * sr / hop));
+        const maxF = Math.max(minF + 1, Math.round(0.7 * sr / hop));
         for (let f = 0; f < frames; ) {
             if (!mark[f]) { f++; continue; }
-            let e = f; while (e < frames && mark[e]) e++;
-            if ((e - f) * hop < 0.035 * sr) for (let i = f; i < e; i++) mark[i] = 0;
+            let e = f;
+            while (e < frames && mark[e]) e++;
+            const len = e - f;
+            if (len < minF || len > maxF) {
+                for (let i = f; i < e; i++) mark[i] = 0;
+            }
             f = e;
         }
+
+        // Never cut into a rising sung onset
+        for (let f = 1; f < frames - 3; f++) {
+            if (!mark[f]) continue;
+            if (rms[f + 1] > loud * 0.4 || rms[f + 2] > loud * 0.4 || rms[f + 3] > loud * 0.45) {
+                mark[f] = 0;
+            }
+            // Also clear if previous frame was already loud (still in a phrase)
+            if (rms[f - 1] > loud * 0.35) mark[f] = 0;
+        }
+
         let active = 0;
-        for (const m of mark) if (m) active++;
-        if (active / frames < 0.003 || active / frames > 0.2) return { channels, applied: false };
+        for (let f = 0; f < frames; f++) if (mark[f]) active++;
+        if (active < 4 || active / frames > 0.12) return { channels, applied: false };
+
         const target = Math.pow(10, -o.cutDb / 20);
-        const up = 1 - Math.exp(-hop / (0.03 * sr));
-        const down = 1 - Math.exp(-hop / (0.012 * sr));
+        const up = 1 - Math.exp(-hop / (0.045 * sr));
+        const down = 1 - Math.exp(-hop / (0.025 * sr));
         let g = 1;
         const gain = new Float32Array(n);
         for (let f = 0; f < frames; f++) {
@@ -483,14 +857,150 @@ function createStudioEngine() {
                 for (let i = 0; i < n; i++) y[i] = x[i] * gain[i];
                 return y;
             }),
-            applied: true, cutDb: o.cutDb
+            applied: true, cutDb: o.cutDb, framesActive: active
         };
     }
 
     // ---------------------------------------------------------
-    // The vocal polish pipeline (high-pass -> breaths -> de-ess ->
-    // auto-EQ -> phrase gate). No heavy spectral denoise here —
-    // that is what often adds the "static" people hear.
+    // Phrase-level level evening
+    // Makes quieter lines closer to louder ones *before* the
+    // compressors run, so the compressor does less pumping.
+    // Only moves phrases a few dB; never touches true silence.
+    // ---------------------------------------------------------
+
+    function phraseEven(channels, sr, options) {
+        const o = Object.assign({
+            maxBoostDb: 4.5,
+            maxCutDb: 3.0,
+            minPhraseSec: 0.18,
+            target: "median"   // median of phrase levels
+        }, options || {});
+
+        const n = channels[0].length;
+        if (n < sr * 0.8) return { channels, applied: false, phrases: 0 };
+
+        const hop = Math.max(1, Math.round(0.01 * sr));
+        const frames = Math.ceil(n / hop);
+        const mono = new Float32Array(n);
+        for (let c = 0; c < channels.length; c++) {
+            const x = channels[c];
+            for (let i = 0; i < n; i++) mono[i] += x[i] / channels.length;
+        }
+
+        const rms = new Float32Array(frames);
+        for (let f = 0; f < frames; f++) {
+            let e = 0;
+            const a = f * hop, b = Math.min(n, a + hop);
+            for (let i = a; i < b; i++) e += mono[i] * mono[i];
+            rms[f] = Math.sqrt(e / Math.max(1, b - a));
+        }
+
+        const sorted = Float32Array.from(rms).sort();
+        const loud = sorted[Math.min(frames - 1, Math.floor(frames * 0.9))] || 1e-6;
+        const floor = sorted[Math.max(0, Math.floor(frames * 0.1))] || 1e-9;
+        // Phrase gate: well above noise, under soft singing still counts
+        const thr = Math.max(loud * 0.12, floor * 4, 1e-6);
+
+        // Segment continuous runs above threshold
+        const minF = Math.max(2, Math.round(o.minPhraseSec * sr / hop));
+        const phrases = [];
+        for (let f = 0; f < frames; ) {
+            if (rms[f] < thr) { f++; continue; }
+            let e = f;
+            while (e < frames && rms[e] >= thr * 0.85) e++; // allow slight dips inside phrase
+            // merge tiny gaps (<80 ms) into the phrase
+            while (e < frames) {
+                let g = e;
+                while (g < frames && rms[g] < thr * 0.85) g++;
+                if ((g - e) * hop < 0.08 * sr && g < frames && rms[g] >= thr * 0.85) {
+                    e = g;
+                    while (e < frames && rms[e] >= thr * 0.85) e++;
+                } else break;
+            }
+            if (e - f >= minF) phrases.push({ start: f, end: e });
+            f = Math.max(e, f + 1);
+        }
+
+        if (phrases.length < 2) return { channels, applied: false, phrases: phrases.length };
+
+        // RMS of each phrase
+        const levels = phrases.map((ph) => {
+            let e = 0, cnt = 0;
+            for (let f = ph.start; f < ph.end; f++) { e += rms[f] * rms[f]; cnt++; }
+            return Math.sqrt(e / Math.max(1, cnt));
+        });
+        const levelDb = levels.map((v) => 20 * Math.log10(Math.max(v, 1e-12)));
+        const sortedDb = levelDb.slice().sort((a, b) => a - b);
+        const targetDb = sortedDb[sortedDb.length >> 1]; // median
+
+        // Per-phrase gain (capped)
+        const phraseGainDb = levelDb.map((db) => {
+            let d = targetDb - db;
+            if (d > o.maxBoostDb) d = o.maxBoostDb;
+            if (d < -o.maxCutDb) d = -o.maxCutDb;
+            // Ignore tiny moves
+            if (Math.abs(d) < 0.4) d = 0;
+            return d;
+        });
+
+        const moved = phraseGainDb.filter((d) => d !== 0).length;
+        if (moved < 1) return { channels, applied: false, phrases: phrases.length };
+
+        // Build smooth sample gain curve
+        const gain = new Float32Array(n);
+        for (let i = 0; i < n; i++) gain[i] = 1;
+
+        const fadeF = Math.max(1, Math.round(0.04 * sr / hop)); // ~40 ms edges
+        for (let p = 0; p < phrases.length; p++) {
+            const db = phraseGainDb[p];
+            if (db === 0) continue;
+            const gLin = Math.pow(10, db / 20);
+            const a = phrases[p].start;
+            const b = phrases[p].end;
+            for (let f = a; f < b; f++) {
+                // Edge fade inside phrase so joins don't click
+                let edge = 1;
+                if (f - a < fadeF) edge = (f - a + 1) / (fadeF + 1);
+                if (b - 1 - f < fadeF) edge = Math.min(edge, (b - f) / (fadeF + 1));
+                const g = 1 + (gLin - 1) * edge;
+                const s0 = f * hop, s1 = Math.min(n, s0 + hop);
+                for (let i = s0; i < s1; i++) gain[i] = g;
+            }
+        }
+
+        // One-pole smooth across whole take to kill any remaining steps
+        const alpha = 1 - Math.exp(-hop / (0.025 * sr));
+        let g = 1;
+        for (let f = 0; f < frames; f++) {
+            const s0 = f * hop;
+            const target = gain[s0];
+            g += alpha * (target - g);
+            const s1 = Math.min(n, s0 + hop);
+            for (let i = s0; i < s1; i++) gain[i] = g;
+        }
+
+        const out = channels.map((x) => {
+            const y = new Float32Array(n);
+            for (let i = 0; i < n; i++) y[i] = x[i] * gain[i];
+            return y;
+        });
+
+        const maxBoost = Math.max(0, ...phraseGainDb);
+        const maxCut = Math.max(0, ...phraseGainDb.map((d) => -d));
+        return {
+            channels: out,
+            applied: true,
+            phrases: phrases.length,
+            adjusted: moved,
+            maxBoostDb: Math.round(maxBoost * 10) / 10,
+            maxCutDb: Math.round(maxCut * 10) / 10
+        };
+    }
+
+    // ---------------------------------------------------------
+    // The vocal polish pipeline (high-pass -> multiband -> breaths ->
+    // de-ess -> auto-EQ -> phrase evening -> phrase gate).
+    // No heavy spectral denoise here — that often adds "static".
     // ---------------------------------------------------------
 
     function prepareVocal(channels, sr, options) {
@@ -501,12 +1011,20 @@ function createStudioEngine() {
         let ch = highPass(channels, sr, o.highPassHz);
         report.push(`Cleaned rumble below ${Math.round(o.highPassHz)} Hz.`);
 
+        if (o.multiband !== false) {
+            const mb = multibandClean(ch, sr, o.multibandOpts || undefined);
+            ch = mb.channels;
+            report.push(mb.applied
+                ? `Cleared low-mid mud (multiband) by up to ${mb.maxCutDb} dB — only where it was clouding the voice.`
+                : `Checked low-mid mud: already clear.`);
+        }
+
         if (o.breaths !== false) {
             const b = reduceBreaths(ch, sr);
             ch = b.channels;
             report.push(b.applied
                 ? `Softened breath noises by about ${b.cutDb} dB.`
-                : `Checked for breaths: none that needed work.`);
+                : `Checked for inhales/breaths: none that needed work.`);
         }
 
         let de = { applied: false, maxCutDb: 0 };
@@ -514,7 +1032,7 @@ function createStudioEngine() {
             de = deEss(ch, sr);
             ch = de.channels;
             report.push(de.applied
-                ? `Tamed harsh "s" sounds by up to ${de.maxCutDb.toFixed(1)} dB.`
+                ? `Tamed harsh "s" / air only where it spiked (up to ${de.maxCutDb.toFixed(1)} dB) — rest of the voice left bright.`
                 : `Checked for harsh "s" sounds: none that needed work.`);
         }
 
@@ -531,6 +1049,14 @@ function createStudioEngine() {
             } else {
                 report.push("Not enough singing to judge the tone, so the EQ was skipped.");
             }
+        }
+
+        if (o.phraseEven !== false) {
+            const pe = phraseEven(ch, sr, o.phraseEvenOpts || undefined);
+            ch = pe.channels;
+            report.push(pe.applied
+                ? `Evened ${pe.adjusted} of ${pe.phrases} phrases (up to +${pe.maxBoostDb} / −${pe.maxCutDb} dB) so compressors work less hard.`
+                : `Checked phrase levels: already even enough.`);
         }
 
         if (o.gate !== false) {
@@ -579,9 +1105,19 @@ function createStudioEngine() {
             for (let i = pre; i < len; i++) {
                 const t = (i - pre) / sr;
                 const env = Math.pow(10, -3 * t / o.rt60);                         // -60 dB at rt60
-                const bright = 0.85 - 0.73 * Math.min(1, t / (o.rt60 * 0.8));        // darker with time
+                // Darker, smoother noise — bright noise tails read as radio static
+                const bright = 0.55 - 0.48 * Math.min(1, t / (o.rt60 * 0.65));
                 lp += bright * ((r() * 2 - 1) - lp);
                 x[i] = lp * env;
+            }
+            // Extra one-pole darkening so tails aren't hissy
+            {
+                let y = 0;
+                const a = 0.18;
+                for (let i = 0; i < len; i++) {
+                    y += a * (x[i] - y);
+                    x[i] = y;
+                }
             }
 
             early.forEach((sec, k) => {
@@ -732,7 +1268,7 @@ function createStudioEngine() {
     // when the peak arrives; the result can never exceed the ceiling.
     function limiter(channels, sr, ceilingDb, options) {
 
-        const o = Object.assign({ lookaheadSec: 0.005, releaseSec: 0.08 }, options || {});
+        const o = Object.assign({ lookaheadSec: 0.006, releaseSec: 0.12 }, options || {});
         const ceil = Math.pow(10, ceilingDb / 20), n = channels[0].length, L = Math.max(2, Math.round(o.lookaheadSec * sr));
 
         // gain each sample needs on its own
@@ -943,6 +1479,7 @@ function createStudioEngine() {
             sub:   bandRmsDb(slice, sr, 35, 70),      // sub / 808 floor
             kick:  bandRmsDb(slice, sr, 55, 100),     // kick fundamental
             body:  bandRmsDb(slice, sr, 100, 200),    // kick beater / low punch
+            bass:  bandRmsDb(slice, sr, 90, 280),     // bass guitar / bassline body
             mud:   bandRmsDb(slice, sr, 200, 400),    // boxy low-mid
             chord: bandRmsDb(slice, sr, 350, 700),    // chord / pad body
             harm:  bandRmsDb(slice, sr, 700, 1400),   // harmonic definition
@@ -960,6 +1497,7 @@ function createStudioEngine() {
             sub:   bandCorrection(rel.sub,  -4.0,  6.0, 6.0, 2.5),
             kick:  bandCorrection(rel.kick, -3.5,  5.5, 7.0, 2.0),
             body:  bandCorrection(rel.body, -4.0,  4.5, 4.5, 2.0),
+            bass:  bandCorrection(rel.bass, -2.5,  4.5, 4.5, 1.5),
             mud:   bandCorrection(rel.mud,  -5.0,  2.5, 1.5, 3.5), // mostly cut mud
             chord: bandCorrection(rel.chord,-4.5,  3.5, 3.5, 2.0),
             harm:  bandCorrection(rel.harm, -4.0,  3.0, 3.0, 2.0),
@@ -983,7 +1521,7 @@ function createStudioEngine() {
      * Covers kick → chords → hats, not just low end.
      */
     function enhanceBeat(channels, sr, options) {
-        const o = Object.assign({ strength: 1, maxBoostDb: 7.5, protectLows: true }, options || {});
+        const o = Object.assign({ strength: 1.0, maxBoostDb: 6.0, protectLows: true }, options || {});
         const analysis = analyzeBeat(channels, sr);
         const report = [];
         const c = analysis.corr;
@@ -998,6 +1536,7 @@ function createStudioEngine() {
             sub: scale(c.sub),
             kick: scale(c.kick),
             body: scale(c.body),
+            bass: scale(c.bass),
             mud: scale(c.mud),
             chord: scale(c.chord),
             harm: scale(c.harm),
@@ -1013,11 +1552,7 @@ function createStudioEngine() {
             g.sub = Math.max(0, g.sub);
             g.kick = Math.max(0, g.kick);
             g.body = Math.max(0, g.body);
-        }
-
-        if (!analysis.needed) {
-            report.push("Beat balance already sits well across kick, chords, and highs — left the instrumental alone.");
-            return { channels, report, analysis: Object.assign({}, analysis, { gains: g }) };
+            if (g.bass != null) g.bass = Math.max(0, g.bass);
         }
 
         const filters = [];
@@ -1032,6 +1567,15 @@ function createStudioEngine() {
         }
         if (Math.abs(g.body) >= 0.45) {
             filters.push(design.peaking(120, g.body, 0.8, sr));
+        }
+
+        // --- Bass guitar / bassline (melodic low end, not just kick) ---
+        // Keep modest: huge low boost + full-mix peak scale was burying mids/highs
+        if (g.bass != null && g.bass >= 0.5) {
+            const b = Math.min(3.5, g.bass);
+            filters.push(design.peaking(110, b * 0.75, 0.9, sr));
+            filters.push(design.peaking(180, b * 0.55, 1.0, sr));
+            filters.push(design.lowShelf(140, Math.min(2.0, b * 0.35), sr));
         }
 
         // --- Low-mid mud vs chord body ---
@@ -1067,12 +1611,59 @@ function createStudioEngine() {
 
         const beforePeak = peakAbs(channels);
         let out = channels.map((ch) => runCascade(ch, filters));
+
+        // Section-aware bassline: when the instrumental gets louder (typical
+        // chorus / drop), give the bass guitar band a little extra presence.
+        // No chorus labels — driven by overall energy only.
+        if ((g.bass != null && g.bass >= 1.0) || (analysis.rel && analysis.rel.bass != null && analysis.rel.bass < -3.5)) {
+            const mono = monoOf(out);
+            const hop = Math.max(1, Math.round(0.05 * sr));
+            const frames = Math.ceil(mono.length / hop);
+            const e = new Float32Array(frames);
+            for (let f = 0; f < frames; f++) {
+                const a = f * hop, b = Math.min(mono.length, a + hop);
+                let s = 0;
+                for (let i = a; i < b; i++) s += mono[i] * mono[i];
+                e[f] = Math.sqrt(s / Math.max(1, b - a));
+            }
+            const sorted = Float32Array.from(e).sort();
+            const p60 = sorted[Math.min(frames - 1, Math.floor(frames * 0.6))] || 1e-9;
+            const p85 = sorted[Math.min(frames - 1, Math.floor(frames * 0.85))] || p60;
+            // Extra boost only on louder frames (0 dB quiet → up to ~2.5 dB hot)
+            const baseLift = Math.min(3.5, 1.5 + Math.max(0, g.bass || 0) * 0.4);
+            const bassFilters = [
+                design.peaking(110, baseLift, 0.9, sr),
+                design.peaking(180, baseLift * 0.85, 1.0, sr),
+                design.peaking(240, baseLift * 0.55, 1.1, sr),
+                design.lowShelf(135, Math.min(3.5, baseLift * 0.45), sr)
+            ];
+            const lifted = out.map((ch) => runCascade(ch, bassFilters));
+            const next = out.map((ch) => new Float32Array(ch.length));
+            for (let f = 0; f < frames; f++) {
+                const loud = e[f] >= p60 * 0.95;
+                const hot = e[f] >= p85 * 0.95;
+                // blend: quiet=original EQ, mid=partial lift, hot=full lift
+                let w = 0;
+                if (hot) w = 1;
+                else if (loud) w = 0.7 + 0.3 * Math.min(1, (e[f] - p60) / Math.max(1e-9, p85 - p60));
+                else w = 0.65; // quiet parts still get some bass presence under the vocal
+                const a = f * hop, b = Math.min(out[0].length, a + hop);
+                for (let c = 0; c < out.length; c++) {
+                    for (let i = a; i < b; i++) {
+                        next[c][i] = out[c][i] * (1 - w) + lifted[c][i] * w;
+                    }
+                }
+            }
+            out = next;
+            report.push("Lifted the bassline where the beat gets denser (verses a little, choruses more).");
+        }
+
         const afterPeak = peakAbs(out);
 
         if (afterPeak > 1e-6 && beforePeak > 1e-6) {
             const rise = afterPeak / beforePeak;
-            if (rise > 1.22) {
-                const sc = 1.22 / rise;
+            if (rise > 1.35) {
+                const sc = 1.35 / rise;
                 out = out.map((ch) => {
                     const y = new Float32Array(ch.length);
                     for (let i = 0; i < ch.length; i++) y[i] = ch[i] * sc;

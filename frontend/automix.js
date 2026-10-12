@@ -277,6 +277,14 @@ function setStatus(text) {
   if (el) el.textContent = text;
 }
 
+function formatMixDuration(sec) {
+  if (!(sec >= 0) || !isFinite(sec)) return "—";
+  const s = Math.round(sec);
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return m + ":" + (r < 10 ? "0" : "") + r;
+}
+
 // A short, plain-language list of what was done, under the status line.
 function showReport(lines) {
   if (typeof document === "undefined") return;
@@ -385,7 +393,7 @@ function measureSpaceBudget(placedChannels, beatChannels, sr, bpm) {
   const useRoom = dryness > 0.35;
   const roomBelowDb = Math.round(20 + (1 - dryness) * 10);
   const roomRt60 = 0.28 + dryness * 0.22;
-  const midDuckDb = denseBeat ? 3.5 : 2.5;
+  const midDuckDb = denseBeat ? 1.6 : 1.2;
   const duckDepth = 0.45 + (1 - dryness) * 0.2;
   const harmonyBelowDb = Math.round(9 + (1 - dryness) * 6);
 
@@ -407,8 +415,260 @@ function measureSpaceBudget(placedChannels, beatChannels, sr, bpm) {
   };
 }
 
+
+/** Soften only the tallest peaks so a quiet take can be boosted without clipping. */
+function peakSoften(channels, ceilingDb) {
+  const ceil = Math.pow(10, (ceilingDb != null ? ceilingDb : -3) / 20);
+  let peak = 0;
+  for (const ch of channels) {
+    for (let i = 0; i < ch.length; i++) {
+      const a = Math.abs(ch[i]);
+      if (a > peak) peak = a;
+    }
+  }
+  if (peak <= ceil || peak < 1e-9) return { channels, applied: false, peakDb: peak > 0 ? 20 * Math.log10(peak) : -120 };
+
+  // Soft threshold: leave most of the wave, ease only above ~70% of ceiling path toward ceil
+  const thr = ceil * 0.7;
+  const out = channels.map((ch) => {
+    const y = new Float32Array(ch.length);
+    for (let i = 0; i < ch.length; i++) {
+      const x = ch[i];
+      const a = Math.abs(x);
+      if (a <= thr) { y[i] = x; continue; }
+      const s = x < 0 ? -1 : 1;
+      const t = (a - thr) / Math.max(1e-9, peak - thr);
+      // map [thr, peak] -> [thr, ceil]
+      const b = thr + t * (ceil - thr);
+      // blend toward soft limit
+      y[i] = s * (0.35 * a + 0.65 * Math.min(a, b));
+      if (Math.abs(y[i]) > ceil) y[i] = s * ceil * (1 + Math.tanh(Math.abs(y[i]) / ceil - 1) * 0.25);
+    }
+    return y;
+  });
+  let peak2 = 0;
+  for (const ch of out) for (let i = 0; i < ch.length; i++) {
+    const a = Math.abs(ch[i]); if (a > peak2) peak2 = a;
+  }
+  return {
+    channels: out,
+    applied: true,
+    peakDb: peak > 0 ? 20 * Math.log10(peak) : -120,
+    peakDbOut: peak2 > 0 ? 20 * Math.log10(peak2) : -120
+  };
+}
+
+/**
+ * Listen to the finished mix offline: peak + harsh top.
+ * Fix at most 1–2 small things, then stop.
+ */
+function listenAndCorrect(channels, sr) {
+  const report = [];
+  let chs = channels.map((c) => Float32Array.from(c));
+  const n = chs[0].length;
+
+  function samplePeak() {
+    let peak = 0;
+    for (const ch of chs) for (let i = 0; i < ch.length; i++) {
+      const a = Math.abs(ch[i]); if (a > peak) peak = a;
+    }
+    return peak;
+  }
+
+  function harshRatio() {
+    // crude: energy of difference after one-pole HP ~6kHz vs full
+    const a = Math.exp(-2 * Math.PI * 6000 / sr);
+    let eFull = 0, eHi = 0;
+    for (const ch of chs) {
+      let lp = 0;
+      for (let i = 0; i < n; i += 4) {
+        const x = ch[i];
+        lp = a * lp + (1 - a) * x;
+        const hi = x - lp;
+        eFull += x * x;
+        eHi += hi * hi;
+      }
+    }
+    if (eFull < 1e-12) return 0;
+    return eHi / eFull;
+  }
+
+  let fixes = 0;
+
+  // 1) Peak safety
+  let peak = samplePeak();
+  const peakDb = peak > 0 ? 20 * Math.log10(peak) : -120;
+  if (peakDb > -0.5 && fixes < 2) {
+    const target = Math.pow(10, -1.2 / 20);
+    const g = target / peak;
+    for (const ch of chs) for (let i = 0; i < n; i++) ch[i] *= g;
+    report.push(`Listen pass: lowered overall level ${(20 * Math.log10(1 / g)).toFixed(1)} dB so peaks stay clean.`);
+    fixes++;
+    peak = samplePeak();
+  }
+
+  // 2) Harsh top only if clearly excessive
+  const harsh = harshRatio();
+  if (harsh > 0.22 && fixes < 2) {
+    // gentle shelf cut ~7kHz ~2dB
+    const freq = 7000;
+    const gainDb = -2.2;
+    const A = Math.pow(10, gainDb / 40);
+    const w0 = 2 * Math.PI * freq / sr;
+    const cosw = Math.cos(w0), sinw = Math.sin(w0);
+    const alpha = sinw / 2 * Math.sqrt(2);
+    const b0 = A * ((A + 1) + (A - 1) * cosw + 2 * Math.sqrt(A) * alpha);
+    const b1 = -2 * A * ((A - 1) + (A + 1) * cosw);
+    const b2 = A * ((A + 1) + (A - 1) * cosw - 2 * Math.sqrt(A) * alpha);
+    const a0 = (A + 1) - (A - 1) * cosw + 2 * Math.sqrt(A) * alpha;
+    const a1 = 2 * ((A - 1) - (A + 1) * cosw);
+    const a2 = (A + 1) - (A - 1) * cosw - 2 * Math.sqrt(A) * alpha;
+    const c0 = b0 / a0, c1 = b1 / a0, c2 = b2 / a0, d1 = a1 / a0, d2 = a2 / a0;
+    chs = chs.map((ch) => {
+      const y = new Float32Array(n);
+      let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+      for (let i = 0; i < n; i++) {
+        const x0 = ch[i];
+        const out = c0 * x0 + c1 * x1 + c2 * x2 - d1 * y1 - d2 * y2;
+        x2 = x1; x1 = x0; y2 = y1; y1 = out;
+        y[i] = out;
+      }
+      return y;
+    });
+    report.push("Listen pass: eased a bit of harsh top so the mix stays smooth.");
+    fixes++;
+  }
+
+  if (!fixes) report.push("Listen pass: mix already measured clean — no extra changes.");
+  return { channels: chs, report, fixes };
+}
+
+
+/**
+ * Quick listen: is this take already hot/strained, or thin/raw?
+ * Used only to choose light vs full processing — no midrange carving.
+ */
+function assessVocalTake(buffer) {
+  if (!buffer || !buffer.length) {
+    return { path: "full", score: 0, rawScore: 0, hotScore: 0, rmsDb: -60, peakDb: -60 };
+  }
+  const n = buffer.length;
+  const chs = [];
+  for (let c = 0; c < buffer.numberOfChannels; c++) chs.push(buffer.getChannelData(c));
+  const sr = buffer.sampleRate || 44100;
+  const hop = Math.max(1, Math.round(0.01 * sr));
+  const frames = Math.ceil(n / hop);
+  const rms = new Float32Array(frames);
+  const zcr = new Float32Array(frames);
+  let peak = 0;
+  for (let f = 0; f < frames; f++) {
+    const a = f * hop, b = Math.min(n, a + hop);
+    let e = 0, zc = 0, prev = 0, cnt = 0;
+    for (let i = a; i < b; i++) {
+      let v = 0;
+      for (const ch of chs) v += ch[i];
+      v /= chs.length;
+      e += v * v;
+      const av = v < 0 ? -v : v;
+      if (av > peak) peak = av;
+      if (i > a && ((prev >= 0 && v < 0) || (prev < 0 && v >= 0))) zc++;
+      prev = v;
+      cnt++;
+    }
+    rms[f] = Math.sqrt(e / Math.max(1, cnt));
+    zcr[f] = zc / Math.max(1, cnt);
+  }
+  const sorted = Float32Array.from(rms).sort();
+  const p50 = sorted[Math.floor(frames * 0.5)] || 1e-9;
+  const p90 = sorted[Math.min(frames - 1, Math.floor(frames * 0.9))] || p50;
+  const p10 = sorted[Math.max(0, Math.floor(frames * 0.1))] || 1e-9;
+  const rmsDb = 20 * Math.log10(Math.max(p90, 1e-12));
+  const peakDb = 20 * Math.log10(Math.max(peak, 1e-12));
+  const crest = peakDb - rmsDb;
+
+  let zcLoud = 0, zcN = 0;
+  for (let f = 0; f < frames; f++) {
+    if (rms[f] < p50 * 1.2) continue;
+    zcLoud += zcr[f];
+    zcN++;
+  }
+  const meanZc = zcN ? zcLoud / zcN : 0;
+  let hotScore = 0;
+  if (rmsDb > -18) hotScore += 0.35;
+  if (rmsDb > -12) hotScore += 0.25;
+  if (crest < 8) hotScore += 0.25;
+  if (meanZc > 0.16) hotScore += 0.25;
+  hotScore = Math.min(1, hotScore);
+
+  let rawScore = 0;
+  if (rmsDb < -22) rawScore += 0.35;
+  if (crest > 14) rawScore += 0.3;
+  if (p90 > p10 * 8) rawScore += 0.2;
+  if (meanZc < 0.1 && rmsDb < -18) rawScore += 0.15;
+  rawScore = Math.min(1, rawScore);
+
+  let path = "full";
+  if (hotScore >= 0.55) path = "light";
+  else if (rawScore >= 0.45) path = "smooth";
+
+  return {
+    path,
+    score: path === "light" ? hotScore : (path === "smooth" ? rawScore : 0.5),
+    hotScore: Math.round(hotScore * 100) / 100,
+    rawScore: Math.round(rawScore * 100) / 100,
+    rmsDb: Math.round(rmsDb * 10) / 10,
+    peakDb: Math.round(peakDb * 10) / 10,
+    crest: Math.round(crest * 10) / 10
+  };
+}
+
+function applyAdaptiveRecipe(recipe, assessment, balanceMode) {
+  const r = Object.assign({}, recipe);
+  r.eq = Object.assign({}, recipe.eq || {
+    presenceDb: recipe.presenceDb,
+    airDb: recipe.airDb,
+    cutStrength: recipe.cutStrength,
+    boostStrength: recipe.boostStrength
+  });
+  r.sat = Object.assign({}, recipe.sat || { drive: 1.35, mix: 0.08 });
+
+  const path = (assessment && assessment.path) || "full";
+
+  if (path === "light") {
+    r.eq.presenceDb = Math.min(r.eq.presenceDb != null ? r.eq.presenceDb : 1, 0.7);
+    r.eq.airDb = Math.min(r.eq.airDb != null ? r.eq.airDb : 1.2, 0.9);
+    r.eq.boostStrength = Math.min(r.eq.boostStrength != null ? r.eq.boostStrength : 0.4, 0.28);
+    r.presenceDb = r.eq.presenceDb;
+    r.airDb = r.eq.airDb;
+    r.sat = { drive: Math.min(r.sat.drive, 1.3), mix: Math.min(r.sat.mix, 0.06) };
+    r.compressTightenDb = (r.compressTightenDb || 0) * 0.45;
+    r.vocalAboveBeatDb = Math.min(r.vocalAboveBeatDb != null ? r.vocalAboveBeatDb : 0.8, 0.4);
+    r._adaptiveNote = "Light path: this take was already loud/pushed — less hype so strain stays natural.";
+  } else if (path === "smooth") {
+    r.eq.presenceDb = Math.max(r.eq.presenceDb != null ? r.eq.presenceDb : 1, 1.0);
+    r.eq.airDb = Math.min(Math.max(r.eq.airDb != null ? r.eq.airDb : 1.2, 1.0), 1.6);
+    r.presenceDb = r.eq.presenceDb;
+    r.airDb = r.eq.airDb;
+    r.sat = { drive: Math.min(r.sat.drive, 1.4), mix: Math.min(r.sat.mix, 0.09) };
+    r.compressTightenDb = Math.max(r.compressTightenDb || 0, 1.8);
+    r._levelerExtraDb = 2.5;
+    r.vocalAboveBeatDb = r.vocalAboveBeatDb != null ? r.vocalAboveBeatDb : 0.8;
+    r._adaptiveNote = "Smooth path: take sounded raw/uneven — more evening, gentle polish (not more grit).";
+  } else {
+    r._adaptiveNote = "Full path: balanced polish for this take.";
+  }
+
+  if (balanceMode === "closer") {
+    r.vocalAboveBeatDb = Math.min(r.vocalAboveBeatDb, 0.2) - 0.3;
+  } else if (balanceMode === "forward") {
+    r.vocalAboveBeatDb = Math.min(2.2, (r.vocalAboveBeatDb || 0.8) + 0.8);
+  }
+
+  return r;
+}
+
 async function processAutomix(state, options) {
-  const opt = Object.assign({ polish: true, effects: true, master: true, beatEnhance: true, style: "universal", polishLevel: "radio" }, options || {});
+  const opt = Object.assign({ polish: true, effects: true, master: true, beatEnhance: true, fillInstruments: false, style: "universal", polishLevel: "radio" }, options || {});
   const vocal = state.tunedVocal || state.preparedVocal || state.vocalBuffer;   // corrected, else cleaned-up, else as recorded
   const beat = state.beatBuffer;
   const offset = state.vocalOffset || 0;
@@ -418,13 +678,20 @@ async function processAutomix(state, options) {
   const Levels = window.VocalVaultLevels;
   const Studio = window.VocalVaultStudio;
   const Presets = window.VocalVaultPresets;
-  const recipe = Presets && Presets.resolve
+  let recipe = Presets && Presets.resolve
     ? Presets.resolve(opt.style || "universal", opt.polishLevel || "radio")
     : null;
 
   const metadata = {};
   if (state.vocalPitch && state.vocalPitch.minMidi != null) {
     metadata.minPitchHz = 440 * Math.pow(2, (state.vocalPitch.minMidi - 69) / 12);
+  }
+
+  // Listen first: hot/strained → light path; raw/cracks → smooth path; else full
+  const assessment = assessVocalTake(vocal);
+  const balanceMode = (opt.balanceMode || (typeof document !== "undefined" && document.getElementById("mix-balance") && document.getElementById("mix-balance").value) || "balanced");
+  if (recipe) {
+    recipe = applyAdaptiveRecipe(recipe, assessment, balanceMode);
   }
 
   const first = calculateAutoMixParams(vocal, beat, metadata);
@@ -437,6 +704,13 @@ async function processAutomix(state, options) {
 
   if (recipe) {
     lines.push(`Style: ${recipe.styleLabel} · Polish: ${recipe.polishLabel} — ${recipe.blurb}`);
+    if (recipe._adaptiveNote) lines.push(recipe._adaptiveNote);
+  } else {
+    lines.push(assessment.path === "light"
+      ? "Light processing: take already sounded pushed."
+      : assessment.path === "smooth"
+        ? "Smooth path: evening a raw/uneven take."
+        : "Standard processing path.");
   }
 
   // 1. Vocal polish: high-pass, de-ess, auto-EQ
@@ -458,9 +732,18 @@ async function processAutomix(state, options) {
 
   // Style/polish: tighten or loosen compression thresholds
   if (recipe && recipe.compressTightenDb) {
-    const t = recipe.compressTightenDb;
-    if (typeof params.peakThresh === "number") params.peakThresh -= t;
-    if (typeof params.levelerThresh === "number") params.levelerThresh -= t * 0.55;
+    const tt = recipe.compressTightenDb;
+    if (typeof params.peakThresh === "number") params.peakThresh -= tt * (assessment.path === "light" ? 0.5 : 1);
+    if (typeof params.levelerThresh === "number") params.levelerThresh -= tt * 0.55;
+  }
+  // Raw/uneven takes: stronger leveler so cracks and quiet words sit more even
+  if (recipe && recipe._levelerExtraDb && typeof params.levelerThresh === "number") {
+    params.levelerThresh -= recipe._levelerExtraDb;
+    lines.push("Extra evening on uneven lines so the vocal feels less raw.");
+  }
+  // Light path: slightly softer peak stage
+  if (assessment.path === "light" && typeof params.peakThresh === "number") {
+    params.peakThresh += 2; // higher threshold = less peak crushing
   }
 
   // 2. Compression (your two-stage chain), then warmth
@@ -475,6 +758,23 @@ async function processAutomix(state, options) {
     lines.push(...warm.report);
   }
 
+  // 2b. Quiet-but-peaky takes: soften peaks first so level match can raise body without clipping
+  {
+    const vs = params.vocalStats || {};
+    const crest = (vs.peakDb != null && vs.rmsDb != null) ? (vs.peakDb - vs.rmsDb) : 0;
+    if (vs.rmsDb != null && vs.rmsDb < -18 && crest > 10) {
+      const soft = peakSoften(channelsOf(finished), -6);
+      if (soft.applied) {
+        const sr0 = finished.sampleRate;
+        const offline = new OfflineAudioContext(soft.channels.length, soft.channels[0].length, sr0);
+        const buf = offline.createBuffer(soft.channels.length, soft.channels[0].length, sr0);
+        for (let c = 0; c < soft.channels.length; c++) buf.copyToChannel(soft.channels[c], c);
+        finished = buf;
+        lines.push("Softened loud peaks on a quiet take so it can match the beat without clipping.");
+      }
+    }
+  }
+
   // 3. Level matching: measure the finished vocal against the beat
   setStatus("Balancing the vocal against the beat…");
   await nextFrame();
@@ -482,8 +782,22 @@ async function processAutomix(state, options) {
   const sr = beat.sampleRate;
   let levelOptions = (options && options.levels) || (Levels.readOptions && Levels.readOptions()) || undefined;
   if (recipe) {
+    let above = recipe.vocalAboveBeatDb;
+    if (above == null) above = 0;
+    // Default goal: match the beat. "Vocal forward" may go slightly above.
+    if (balanceMode === "closer") above = Math.min(above, -0.3);
+    else if (balanceMode === "forward") above = Math.min(1.2, Math.max(above, 0.6));
+    else above = Math.min(above, 0.25); // balanced → essentially match
     levelOptions = Object.assign({}, levelOptions || {}, {
-      vocalAboveBeatDb: recipe.vocalAboveBeatDb
+      vocalAboveBeatDb: above,
+      vocalPeakCeilingDb: -1.2,
+      maxGainDb: 6
+    });
+  } else {
+    levelOptions = Object.assign({}, levelOptions || {}, {
+      vocalAboveBeatDb: balanceMode === "forward" ? 0.8 : (balanceMode === "closer" ? -0.3 : 0),
+      vocalPeakCeilingDb: -1.2,
+      maxGainDb: 6
     });
   }
   const vocalChannels = channelsOf(finished).map((c) => engine.resample(c, finished.sampleRate, sr));
@@ -498,6 +812,33 @@ async function processAutomix(state, options) {
     beatChannels = enh.channels;
     lines.push(...enh.report);
     state.beatEnhance = enh.analysis;
+  }
+
+  // Optional fill: synthesize missing/thin instruments under the real beat
+  if (opt.fillInstruments && window.VocalVaultFill && window.VocalVaultFill.fillMissing) {
+    setStatus("Checking for missing instruments…");
+    await nextFrame();
+    let rootPc = 0;
+    let scaleName = "major";
+    if (state.beatKey && state.beatKey.key) {
+      const names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+      const idx = names.indexOf(state.beatKey.key);
+      if (idx >= 0) rootPc = idx;
+      if (state.beatKey.scale) scaleName = String(state.beatKey.scale).toLowerCase();
+    } else if (state.tuneOptions && state.tuneOptions.rootPc != null) {
+      rootPc = state.tuneOptions.rootPc;
+      scaleName = state.tuneOptions.scale || "major";
+    }
+    const bpm = state.beatBpm || state.bpm || 90;
+    const fill = window.VocalVaultFill.fillMissing(beatChannels, sr, {
+      bpm: bpm,
+      rootPc: rootPc,
+      scale: scaleName,
+      strength: 0.75
+    });
+    beatChannels = fill.channels;
+    lines.push(...fill.report);
+    state.instrumentFill = fill.detection;
   }
 
   const plan = engine.plan(vocalChannels, beatChannels, sr, offset, levelOptions);
@@ -676,10 +1017,16 @@ async function processAutomix(state, options) {
     if (peak > 0.707) { const k = 0.707 / peak; for (const c of channels) for (let i = 0; i < c.length; i++) c[i] *= k; }
   }
 
+  // ---- Final path (locked order): master → trim to beat → soft floor → export ----
   // Always end on the beat's exact length. FX are rendered with a short tail so
   // reverb doesn't click off; we then trim so 2:09 stays 2:09.
+  const durationInSec = beat.duration;
   const targetLen = beat.length;
+  const lengthBeforeTrim = channels[0].length;
+  let didTrim = false;
+
   if (channels[0].length !== targetLen) {
+    didTrim = true;
     const trimmed = [new Float32Array(targetLen), new Float32Array(targetLen)];
     const copyLen = Math.min(targetLen, channels[0].length);
     const fadeSamples = Math.min(Math.round(0.08 * sr), copyLen);
@@ -696,26 +1043,87 @@ async function processAutomix(state, options) {
     channels = trimmed;
   }
 
-  // Soft floor: pull residual FX hiss/static in near-silence down so the
-  // final product doesn't sound grainy between phrases.
+  // Quiet-gap cleaner: only true near-silence. Partial floors (e.g. 0.35)
+  // left a grainy "grind" that the master made obvious. We now duck gaps
+  // much deeper, open fast on the next phrase, and close slowly so tails
+  // don't turn into static.
   {
-    let peak = 0;
-    for (const ch of channels) for (let i = 0; i < ch.length; i++) {
-      const a = Math.abs(ch[i]); if (a > peak) peak = a;
-    }
-    const thr = peak * 0.0035;
-    const floorG = 0.25;
-    if (peak > 1e-6) {
-      for (const ch of channels) {
-        for (let i = 0; i < ch.length; i++) {
-          const a = Math.abs(ch[i]);
-          if (a < thr && a > 0) {
-            const t = a / thr;
-            ch[i] *= floorG + (1 - floorG) * t * t;
-          }
+    const n = channels[0].length;
+    const hop = Math.max(1, Math.round(0.01 * sr)); // ~10 ms
+    const frames = Math.ceil(n / hop);
+    const rms = new Float32Array(frames);
+    for (let f = 0; f < frames; f++) {
+      const a = f * hop, b = Math.min(n, a + hop);
+      let e = 0, cnt = 0;
+      for (let i = a; i < b; i++) {
+        for (const ch of channels) {
+          const v = ch[i];
+          e += v * v;
+          cnt++;
         }
       }
+      rms[f] = Math.sqrt(e / Math.max(1, cnt));
     }
+    const sorted = Float32Array.from(rms).sort();
+    const p05 = sorted[Math.max(0, Math.floor(frames * 0.05))] || 0;
+    const p50 = sorted[Math.max(0, Math.floor(frames * 0.5))] || 0;
+    const p90 = sorted[Math.min(frames - 1, Math.floor(frames * 0.9))] || p50;
+    // Only act well under the musical floor — don't touch soft singing
+    const thr = Math.max(p05 * 2.2, p50 * 0.025, p90 * 0.008, 1e-7);
+    const floorG = 0.06; // ~-24 dB residual instead of -9 dB (was 0.35)
+    const openA = 1 - Math.exp(-hop / (0.008 * sr));  // open quick for next line
+    const closeA = 1 - Math.exp(-hop / (0.14 * sr)); // close slow — no grit
+    let g = 1;
+    const gain = new Float32Array(n);
+    for (let f = 0; f < frames; f++) {
+      let want = 1;
+      if (rms[f] < thr) {
+        const ratio = Math.min(1, rms[f] / thr);
+        // Smooth curve into the floor (not a hard step)
+        want = floorG + (1 - floorG) * (ratio * ratio);
+      }
+      const alpha = want > g ? openA : closeA;
+      g += alpha * (want - g);
+      const a = f * hop, b = Math.min(n, a + hop);
+      for (let i = a; i < b; i++) gain[i] = g;
+    }
+    for (const ch of channels) {
+      for (let i = 0; i < n; i++) ch[i] *= gain[i];
+    }
+  }
+
+  // Listen pass: measure finished mix, fix at most 1–2 small issues
+  setStatus("Checking the mix…");
+  await nextFrame();
+  {
+    const qc = listenAndCorrect(channels, sr);
+    channels = qc.channels;
+    lines.push(...qc.report);
+  }
+
+  // Assert: soft floor must not change length
+  if (channels[0].length !== targetLen) {
+    const fixed = [new Float32Array(targetLen), new Float32Array(targetLen)];
+    const n = Math.min(targetLen, channels[0].length);
+    for (let c = 0; c < 2; c++) {
+      const src = channels[c] || channels[0];
+      for (let i = 0; i < n; i++) fixed[c][i] = src[i];
+    }
+    channels = fixed;
+  }
+
+  const durationOutSec = targetLen / sr;
+  const inLabel = formatMixDuration(durationInSec);
+  const outLabel = formatMixDuration(durationOutSec);
+  const lengthMatch = Math.abs(durationInSec - durationOutSec) < 0.05;
+
+  // Plain-language length line first (for non-musicians)
+  if (lengthMatch && !didTrim) {
+    lines.unshift(`Song length: ${inLabel} → ${outLabel} (same as the beat — nothing cut or stretched).`);
+  } else if (lengthMatch && didTrim) {
+    lines.unshift(`Song length: ${inLabel} → ${outLabel} (matched the beat; extra FX tail trimmed so the ending stays clean).`);
+  } else {
+    lines.unshift(`Song length: ${inLabel} → ${outLabel}. If these differ, re-run Automix — the final file should match the beat.`);
   }
 
   const out = new AudioBuffer({ numberOfChannels: 2, length: targetLen, sampleRate: sr });
@@ -725,7 +1133,22 @@ async function processAutomix(state, options) {
   state.autoMixParams = params;
   state.levelPlan = plan;
   state.mixRecipe = recipe;
-  state.mixReport = { lines, master: masterInfo, polish: polish, recipe: recipe };
+  state.vocalAssessment = assessment;
+  state.mixReport = {
+    lines,
+    master: masterInfo,
+    polish: polish,
+    recipe: recipe,
+    durationInSec,
+    durationOutSec,
+    durationInLabel: inLabel,
+    durationOutLabel: outLabel,
+    lengthMatch,
+    didTrim,
+    samplesIn: beat.length,
+    samplesOut: targetLen,
+    samplesBeforeTrim: lengthBeforeTrim
+  };
   window.dispatchEvent(new Event("vv-levels-updated"));
   showReport(lines);
 

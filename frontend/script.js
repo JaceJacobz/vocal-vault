@@ -118,9 +118,12 @@ document.addEventListener("DOMContentLoaded", () => {
         // Both files are required.
         if (!vocalFile || !beatFile) {
 
-            alert(
-                "Please select both a vocal track and an instrumental beat."
-            );
+            if (window.VocalVaultModal) {
+                window.VocalVaultModal.alert(
+                    "Select both a vocal track and an instrumental beat.",
+                    "Missing tracks"
+                );
+            }
 
             return;
         }
@@ -179,10 +182,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
             console.error(error);
 
-            alert(
-                "Could not read one of the audio files. " +
-                "Please try another audio format."
-            );
+            if (window.VocalVaultModal) {
+                window.VocalVaultModal.alert(
+                    "Could not read one of the audio files. Try another format (WAV, MP3, M4A).",
+                    "Could not load audio"
+                );
+            }
 
         } finally {
 
@@ -868,19 +873,31 @@ continueAnalysisButton.addEventListener("click", () => {
     const bpmAdjust = document.getElementById("bpm-adjust");
     const bpmHalfButton = document.getElementById("bpm-half-button");
     const bpmDoubleButton = document.getElementById("bpm-double-button");
+    const bpmAltChips = document.getElementById("bpm-alt-chips");
+    const analysisManualBpm = document.getElementById("analysis-manual-bpm");
 
     let analyzedBeatBuffer = null;
     let detectedBpm = null;
     let originalBpm = null;
     let bpmConfidence = 0;
+    let bpmAlternatives = [];
 
     // Prep (or other steps) can set BPM when analysis missed it
-    window.VocalVaultSetBeatBpm = function (bpm) {
+    window.VocalVaultSetBeatBpm = function (bpm, meta) {
         const n = Number(bpm);
         if (!(n > 30 && n < 400)) return;
         detectedBpm = n;
         if (originalBpm == null) originalBpm = n;
+        if (meta && typeof meta.confidence === "number") bpmConfidence = meta.confidence;
         try { showBpm(); } catch (e) { /* ignore */ }
+        // Keep the analysis manual field in sync
+        if (analysisManualBpm && document.activeElement !== analysisManualBpm) {
+            analysisManualBpm.value = String(Math.round(n * 10) / 10);
+        }
+        // Unlock prep timing immediately
+        try {
+            window.dispatchEvent(new CustomEvent("vv-bpm-changed", { detail: { bpm: n } }));
+        } catch (e) { /* ignore */ }
     };
 
     async function runBeatAnalysis() {
@@ -895,6 +912,8 @@ continueAnalysisButton.addEventListener("click", () => {
         beatBpmValue.textContent = "…";
         beatBpmStatus.textContent = "Analyzing beat…";
         bpmAdjust.classList.add("hidden");
+        bpmAlternatives = [];
+        if (bpmAltChips) bpmAltChips.innerHTML = "";
 
         try {
 
@@ -907,18 +926,31 @@ continueAnalysisButton.addEventListener("click", () => {
             if (result.bpm === null) {
 
                 beatBpmValue.textContent = "—";
-                beatBpmStatus.textContent = result.reason;
-
+                beatBpmStatus.textContent =
+                    "Couldn’t read a clear tempo from this beat. " +
+                    "If the file name or beat page shows a number (like 95 or 140), type it under Manual BPM — that unlocks timing tools.";
+                // Still show adjust row so ÷2/×2 + alts can appear once they type
+                bpmAdjust.classList.add("hidden");
                 return;
             }
 
             detectedBpm = result.bpm;
             originalBpm = result.bpm;
             bpmConfidence = result.confidence;
+            bpmAlternatives = Array.isArray(result.alternatives) ? result.alternatives : [];
 
             showBpm();
 
             bpmAdjust.classList.remove("hidden");
+            renderBpmAlternatives();
+
+            if (analysisManualBpm) {
+                analysisManualBpm.value = String(Math.round(result.bpm * 10) / 10);
+            }
+
+            try {
+                window.dispatchEvent(new CustomEvent("vv-bpm-changed", { detail: { bpm: result.bpm } }));
+            } catch (e) { /* ignore */ }
 
         } catch (error) {
 
@@ -927,7 +959,7 @@ continueAnalysisButton.addEventListener("click", () => {
             analyzedBeatBuffer = null;
 
             beatBpmValue.textContent = "—";
-            beatBpmStatus.textContent = "Could not analyze this beat.";
+            beatBpmStatus.textContent = "Couldn’t analyze this beat. Type the tempo number under Manual BPM if you have it.";
 
         }
 
@@ -946,27 +978,92 @@ continueAnalysisButton.addEventListener("click", () => {
 
     function showBpm() {
 
+        if (detectedBpm == null) {
+            beatBpmValue.textContent = "—";
+            return;
+        }
+
         beatBpmValue.textContent = formatBpm(detectedBpm);
 
-        if (detectedBpm === originalBpm) {
+        if (originalBpm != null && Math.abs(detectedBpm - originalBpm) < 0.05) {
 
-            const level =
-                bpmConfidence >= 0.7 ? "high"
-                : bpmConfidence >= 0.45 ? "medium"
-                : "low";
+            if (bpmConfidence >= 0.7) {
+                beatBpmStatus.textContent =
+                    "Looks solid — this is the beat’s speed (beats per minute).";
+            } else if (bpmConfidence >= 0.45) {
+                beatBpmStatus.textContent =
+                    "Good guess. If timing tools feel off later, try “Half speed” or “Double speed” below.";
+            } else {
+                beatBpmStatus.textContent =
+                    "Unsure on this beat. If the song feels twice as fast or slow, tap Half / Double speed — you don’t need to know music theory.";
+            }
 
-            beatBpmStatus.textContent = `Detected · ${level} confidence`;
+        } else if (originalBpm != null) {
+
+            beatBpmStatus.textContent =
+                `Using ${formatBpm(detectedBpm)} (changed from ${formatBpm(originalBpm)}). Timing tools will use this.`;
 
         } else {
 
             beatBpmStatus.textContent =
-                `Adjusted from ${formatBpm(originalBpm)}`;
+                `Using ${formatBpm(detectedBpm)} BPM that you entered. Timing tools are unlocked.`;
 
         }
+
+        bpmAdjust.classList.remove("hidden");
+
+        // Keep half/double labels clear for non-musicians
+        if (bpmHalfButton && detectedBpm != null) {
+            const h = detectedBpm / 2;
+            bpmHalfButton.textContent = h >= 20 ? `Half speed (${formatBpm(h)})` : "Half speed";
+        }
+        if (bpmDoubleButton && detectedBpm != null) {
+            const d = detectedBpm * 2;
+            bpmDoubleButton.textContent = d <= 400 ? `Double speed (${formatBpm(d)})` : "Double speed";
+        }
+
+        renderBpmAlternatives();
 
         // The vocal is judged against the beat, so refresh that comparison.
         showVocalTempo();
 
+    }
+
+    function renderBpmAlternatives() {
+        if (!bpmAltChips) return;
+        bpmAltChips.innerHTML = "";
+        if (!bpmAlternatives.length || detectedBpm == null) return;
+        const seen = {};
+        bpmAlternatives.forEach((a) => {
+            const b = Number(a.bpm);
+            if (!(b > 40 && b < 240)) return;
+            if (Math.abs(b - detectedBpm) / detectedBpm < 0.03) return;
+            const key = formatBpm(b);
+            if (seen[key]) return;
+            seen[key] = true;
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "chip-button";
+            if (a.why === "half") {
+                btn.textContent = `Try ${key} (half)`;
+                btn.title = "Use if the current speed feels twice as fast as the song";
+            } else if (a.why === "double") {
+                btn.textContent = `Try ${key} (double)`;
+                btn.title = "Use if the current speed feels twice as slow as the song";
+            } else {
+                btn.textContent = `Try ${key}`;
+                btn.title = "Another strong guess from the beat";
+            }
+            btn.addEventListener("click", () => {
+                detectedBpm = b;
+                showBpm();
+                if (analysisManualBpm) analysisManualBpm.value = key;
+                try {
+                    window.dispatchEvent(new CustomEvent("vv-bpm-changed", { detail: { bpm: b } }));
+                } catch (e) { /* ignore */ }
+            });
+            bpmAltChips.appendChild(btn);
+        });
     }
 
 
@@ -976,8 +1073,11 @@ continueAnalysisButton.addEventListener("click", () => {
         if (detectedBpm === null || detectedBpm / 2 < 20) return;
 
         detectedBpm = detectedBpm / 2;
-
         showBpm();
+        if (analysisManualBpm) analysisManualBpm.value = formatBpm(detectedBpm);
+        try {
+            window.dispatchEvent(new CustomEvent("vv-bpm-changed", { detail: { bpm: detectedBpm } }));
+        } catch (e) { /* ignore */ }
 
     });
 
@@ -987,10 +1087,35 @@ continueAnalysisButton.addEventListener("click", () => {
         if (detectedBpm === null || detectedBpm * 2 > 400) return;
 
         detectedBpm = detectedBpm * 2;
-
         showBpm();
+        if (analysisManualBpm) analysisManualBpm.value = formatBpm(detectedBpm);
+        try {
+            window.dispatchEvent(new CustomEvent("vv-bpm-changed", { detail: { bpm: detectedBpm } }));
+        } catch (e) { /* ignore */ }
 
     });
+
+    // Manual BPM on the analysis card — always unlocks timing tools
+    if (analysisManualBpm) {
+        const applyManual = () => {
+            const n = parseFloat(analysisManualBpm.value);
+            if (!(n > 30 && n < 400)) return;
+            if (originalBpm == null) originalBpm = n;
+            detectedBpm = n;
+            bpmConfidence = 1;
+            showBpm();
+            try {
+                window.dispatchEvent(new CustomEvent("vv-bpm-changed", { detail: { bpm: n } }));
+            } catch (e) { /* ignore */ }
+        };
+        analysisManualBpm.addEventListener("change", applyManual);
+        analysisManualBpm.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                applyManual();
+            }
+        });
+    }
 
     // ============================================================
 // 9c. BEAT KEY + SCALE ANALYSIS
@@ -2026,7 +2151,12 @@ function showVocalTempo() {
     if (autoMixButton) {
         autoMixButton.addEventListener("click", async () => {
             if (!vocalBuffer || !beatBuffer) {
-                alert("Please load both vocal and beat tracks first.");
+                if (window.VocalVaultModal) {
+                    window.VocalVaultModal.alert(
+                        "Load both a vocal and a beat first.",
+                        "Missing tracks"
+                    );
+                }
                 return;
             }
 
@@ -2048,10 +2178,24 @@ function showVocalTempo() {
                 const polishLevel = document.getElementById("mix-polish")
                     ? document.getElementById("mix-polish").value
                     : "radio";
+                const balanceMode = document.getElementById("mix-balance")
+                    ? document.getElementById("mix-balance").value
+                    : "balanced";
+                const fillInstruments = document.getElementById("fill-instruments")
+                    ? document.getElementById("fill-instruments").checked
+                    : false;
+                if (!window.VocalVaultAutomix || !window.VocalVaultAutomix.process) {
+                    throw new Error("Automix engine not loaded (check automix.js / presets.js script tags).");
+                }
+                if (!window.VocalVaultState.vocalBuffer || !window.VocalVaultState.beatBuffer) {
+                    throw new Error("Vocal or beat buffer missing from state.");
+                }
                 const mixedBuffer = await window.VocalVaultAutomix.process(window.VocalVaultState, {
                     beatEnhance,
                     style,
-                    polishLevel
+                    polishLevel,
+                    balanceMode,
+                    fillInstruments
                 });
 
                 if (autoMixStatus) autoMixStatus.textContent = "Automix complete!";
@@ -2078,7 +2222,8 @@ function showVocalTempo() {
 
             } catch (error) {
                 console.error("Automix failed:", error);
-                if (autoMixStatus) autoMixStatus.textContent = "Automix failed: " + ((error && error.message) || String(error));
+                const msg = (error && error.message) ? error.message : String(error || "unknown error");
+                if (autoMixStatus) autoMixStatus.textContent = "Automix failed: " + msg;
             } finally {
                 autoMixButton.disabled = false;
             }

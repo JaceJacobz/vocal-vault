@@ -80,40 +80,10 @@ if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded
 
     const S = window.VocalVaultState;
     const formatSelect = $("export-format");
+    const filenameInput = $("export-filename");
     const compare = $("mix-compare"), compareInfo = $("mix-compare-info");
     const playBefore = $("mix-play-before"), playAfter = $("mix-play-after"), stopButton = $("mix-stop");
     const download = $("mix-download");
-
-    // ---- file name (user picks it; built in the page's own .mix-option style) ----
-    let nameInput = $("export-name");
-    if (!nameInput) {
-        const field = document.createElement("div");
-        field.className = "mix-option";
-        field.innerHTML = '<label for="export-name">Song name</label>';
-        nameInput = document.createElement("input");
-        nameInput.type = "text";
-        nameInput.id = "export-name";
-        nameInput.placeholder = "Name your song (optional)";
-        nameInput.maxLength = 80;
-        nameInput.autocomplete = "off";
-        field.appendChild(nameInput);
-        const anchor = formatSelect.closest(".mix-option");
-        if (anchor) anchor.after(field);
-        else download.parentNode.insertBefore(field, download);
-    }
-
-    const cleanFileName = () => nameInput.value
-        .replace(/\.wav$/i, "")
-        .replace(/[\\/:*?"<>|\u0000-\u001f]/g, "")
-        .replace(/\s+/g, " ")
-        .replace(/^[.\s]+|[.\s]+$/g, "")
-        .slice(0, 80);
-
-    const updateFileName = () => {
-        const bits = parseInt(formatSelect.value, 10);
-        download.setAttribute("download", (cleanFileName() || `vocal-vault-master-${bits}bit`) + ".wav");
-    };
-    nameInput.addEventListener("input", updateFileName);
 
     // ---- loudness target ----
     LOUDNESS_TARGETS.forEach((t) => {
@@ -145,11 +115,30 @@ if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded
         if (downloadUrl) URL.revokeObjectURL(downloadUrl);
         downloadUrl = URL.createObjectURL(new Blob([encodeWav(channels, mix.sampleRate, bits)], { type: "audio/wav" }));
         download.href = downloadUrl;
-        updateFileName();
-        download.textContent = `Download final mix (${bits}-bit WAV)`;
+        const rep = S.mixReport;
+        let base = (filenameInput && filenameInput.value || "").trim();
+        if (base) {
+            base = base.replace(/[\\/:*?"<>|]+/g, "").replace(/\s+/g, " ").trim();
+            if (!base.toLowerCase().endsWith(".wav")) base += ".wav";
+        } else {
+            base = `vocal-vault-master-${bits}bit.wav`;
+        }
+        download.setAttribute("download", base);
+        const lenHint = rep && rep.durationOutLabel
+            ? ` · ${rep.durationOutLabel}`
+            : (mix.duration ? ` · ${Math.floor(mix.duration / 60)}:${String(Math.round(mix.duration % 60)).padStart(2, "0")}` : "");
+        download.textContent = `Download “${base.replace(/\.wav$/i, "")}” (${bits}-bit WAV${lenHint})`;
         download.classList.remove("hidden");
+        if (rep && rep.durationInLabel && rep.durationOutLabel) {
+            download.title = `Length ${rep.durationInLabel} → ${rep.durationOutLabel}` +
+                (rep.lengthMatch ? " (matches the beat)" : " (check length)");
+        }
     }
     formatSelect.addEventListener("change", refreshDownload);
+    if (filenameInput) {
+        filenameInput.addEventListener("input", refreshDownload);
+        filenameInput.addEventListener("change", refreshDownload);
+    }
 
     // ---- matched-loudness comparison ----
     let before = null, after = null, gains = null, nodes = [], playing = null;

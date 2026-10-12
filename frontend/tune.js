@@ -139,6 +139,7 @@ document.addEventListener("DOMContentLoaded", () => {
         for (let c = 0; c < vocal.numberOfChannels; c++) channels.push(vocal.getChannelData(c));
 
         const selectiveBox = $("tune-selective");
+        const spokenBox = $("tune-spoken");
         const options = {
             rootPc: parseInt(rootSelect.value, 10),
             scale: scaleSelect.value,
@@ -150,8 +151,9 @@ document.addEventListener("DOMContentLoaded", () => {
             autoTranspose: autoKeyBox.checked,
             testDetune: testBox.checked,
             selective: selectiveBox ? selectiveBox.checked : true,
-            selectiveCents: 22,
-            selectiveSoftCents: 48
+            selectiveCents: 24,
+            selectiveSoftCents: 52,
+            spokenSung: spokenBox ? spokenBox.checked : false
         };
         if (S) S.tuneOptions = { rootPc: options.rootPc, scale: options.scale, refCents: options.refCents };   // the harmony layer follows this key
 
@@ -169,10 +171,16 @@ document.addEventListener("DOMContentLoaded", () => {
             showResults(result);
             if (result.selective) {
                 const s = result.selective;
+                const total = (s.corrected || 0) + (s.partial || 0) + (s.skipped || 0);
+                const spokenBit = s.spokenLifted
+                    ? ` Lifted ${s.spokenLifted} talk-sing line${s.spokenLifted === 1 ? "" : "s"} onto a note.`
+                    : "";
                 statusLine.textContent =
-                    `Selective: fixed ${s.corrected}, partial ${s.partial}, left alone ${s.skipped} (of ${result.notes} notes).`;
+                    total
+                        ? `Tuned ${s.corrected} notes, gently fixed ${s.partial}, left ${s.skipped} alone (natural takes stay natural).${spokenBit}`
+                        : "Pitch correction done.";
             } else {
-                statusLine.textContent = "";
+                statusLine.textContent = "Pitch correction done.";
             }
 
         } catch (error) {

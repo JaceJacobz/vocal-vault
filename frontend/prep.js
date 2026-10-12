@@ -4,8 +4,9 @@
    Two optional steps, both OFF unless the user ticks them, because
    noise and loose timing are sometimes part of the performance:
 
-   1. Noise reduction   Spectral subtraction. The noise profile is
-                        learned from the quietest parts of the vocal.
+   1. Noise reduction   Light spectral subtraction only. Strong denoise
+                        adds musical noise/static; the polish chain gate
+                        handles the rest of the gaps.
    2. Timing            Finds the beat's grid, finds where each syllable
                         starts in the vocal, and nudges the ones that
                         are slightly early or late onto the grid.
@@ -96,15 +97,20 @@ function createDenoiseEngine() {
 
             for (let k = 0; k < bins; k++) {
                 const p = P[f][k] + 1e-20;
+                // Light subtraction only — aggressive values create musical noise / static
                 g[k] = Math.max(floor, Math.sqrt(Math.max(0, 1 - alpha * sm[k] / p)));
+                // Never fully zero a bin (residual floor stops "underwater" static)
+                if (g[k] < 0.35) g[k] = 0.35 * 0.4 + g[k] * 0.6;
             }
             for (let k = 0; k < bins; k++) {                       // across frequency
                 let s = 0, c = 0;
-                for (let d = -2; d <= 2; d++) { const j = k + d; if (j >= 0 && j < bins) { s += g[j]; c++; } }
+                for (let d = -3; d <= 3; d++) { const j = k + d; if (j >= 0 && j < bins) { s += g[j]; c++; } }
                 gs[k] = s / c;
             }
-            for (let k = 0; k < bins; k++) {                       // over time: open fast, close slowly
-                gs[k] = gs[k] >= gPrev[k] ? gs[k] : 0.6 * gPrev[k] + 0.4 * gs[k];
+            for (let k = 0; k < bins; k++) {                       // over time: heavier smooth = less twinkle
+                gs[k] = gs[k] >= gPrev[k]
+                    ? 0.55 * gs[k] + 0.45 * gPrev[k]
+                    : 0.75 * gPrev[k] + 0.25 * gs[k];
                 gPrev[k] = gs[k];
                 re[k] *= gs[k]; im[k] *= gs[k];
                 if (k > 0 && k < N / 2) { re[N - k] = re[k]; im[N - k] = -im[k]; }
@@ -125,7 +131,7 @@ function createDenoiseEngine() {
 
     function process(channels, sr, options) {
 
-        const o = Object.assign({ maxReductionDb: 14, oversubtract: 2.2, cleanBelowDb: -62 }, options || {});
+        const o = Object.assign({ maxReductionDb: 7, oversubtract: 1.25, cleanBelowDb: -55 }, options || {});
         const outs = [], infos = [];
         for (const ch of channels) {
             const r = cleanChannel(ch, sr, o);
@@ -428,11 +434,11 @@ function createPrepEngine(tune) {
 
         if (options.denoise) {
             progress(0.1, "Measuring the background noise");
-            const d = createDenoiseEngine().process(channels, sr, { maxReductionDb: 14 });
+            const d = createDenoiseEngine().process(channels, sr, { maxReductionDb: 7, oversubtract: 1.25, cleanBelowDb: -55 });
             stats.denoise = { applied: d.applied, noiseDb: d.noiseDb, reductionDb: d.reductionDb, reason: d.reason };
             if (d.applied) {
                 channels = d.channels;
-                report.push(`Reduced steady background noise by about ${d.reductionDb.toFixed(0)} dB (the noise floor was ${d.noiseDb.toFixed(0)} dBFS).`);
+                report.push(`Light noise cleanup (~${d.reductionDb.toFixed(0)} dB). Stronger denoise is avoided on purpose — it can add static.`);
             } else {
                 report.push(`Left the noise alone: ${d.reason}.`);
             }
@@ -609,6 +615,11 @@ if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded
         section.classList.remove("hidden");
         section.scrollIntoView({ behavior: "smooth", block: "start" });
         refreshTempoControls();
+    });
+
+    // Stay in sync when analysis card sets BPM
+    window.addEventListener("vv-bpm-changed", () => {
+        try { refreshTempoControls(); } catch (e) { /* ignore */ }
     });
 
     // Manual BPM: unlock tempo/timing when the user types a value

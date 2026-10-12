@@ -21,19 +21,25 @@
     </div>
 </div>
 
-<div id="app-shell" class="app-shell mode-pipeline is-booting">
+<div id="app-shell" class="app-shell mode-pipeline is-booting ux-simple">
 
     <!-- TOP BAR -->
     <header class="top-bar">
         <div class="logo-mark" aria-hidden="true"><img src="logo.png" alt=""></div>
         <div class="brand-block">
             <h1>Vocal Vault</h1>
-            <p class="subtitle" id="mode-subtitle">Upload → align → correct → mix → master</p>
+            <p class="subtitle" id="mode-subtitle">Upload, align, correct, mix, master</p>
         </div>
 
-        <div class="mode-switch" role="tablist" aria-label="App mode">
-            <button type="button" class="mode-btn is-active" data-mode="pipeline" role="tab" aria-selected="true">Pipeline</button>
-            <button type="button" class="mode-btn" data-mode="studio" role="tab" aria-selected="false">Studio</button>
+        <div class="header-controls">
+            <div class="mode-switch" role="tablist" aria-label="App mode">
+                <button type="button" class="mode-btn is-active" data-mode="pipeline" role="tab" aria-selected="true">Pipeline</button>
+                <button type="button" class="mode-btn" data-mode="studio" role="tab" aria-selected="false">Studio</button>
+            </div>
+            <div class="ux-switch" role="group" aria-label="Control detail">
+                <button type="button" class="ux-btn is-active" data-ux="simple" id="ux-simple" title="Fewer controls">Simple</button>
+                <button type="button" class="ux-btn" data-ux="pro" id="ux-pro" title="All controls">Pro</button>
+            </div>
         </div>
 
         <div class="top-bar-spacer"></div>
@@ -46,14 +52,23 @@
 
     <!-- ===================== PIPELINE MODE ===================== -->
     <div id="mode-pipeline" class="mode-panel">
+        <div id="pipeline-sticky-cta" class="pipeline-sticky-cta" hidden>
+            <span id="sticky-cta-label">Continue</span>
+            <button type="button" id="sticky-cta-btn" class="primary-button">Continue</button>
+        </div>
+
         <div id="app-container">
+            <div class="pipeline-progress" id="pipeline-progress" aria-live="polite">
+                <span class="pipeline-progress-label">Step <strong id="progress-current">1</strong> of 6</span>
+                <span class="pipeline-progress-name" id="progress-name">Upload</span>
+            </div>
             <nav class="step-rail" aria-label="Workflow steps" id="step-rail">
-                <div class="step-rail-item is-active" data-step="1">Upload</div>
-                <div class="step-rail-item" data-step="2">Align</div>
-                <div class="step-rail-item" data-step="3">Analyze</div>
-                <div class="step-rail-item" data-step="4">Clean-up</div>
-                <div class="step-rail-item" data-step="5">Tune</div>
-                <div class="step-rail-item" data-step="6">Mix</div>
+                <button type="button" class="step-rail-item is-active" data-step="1"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Upload</span></button>
+                <button type="button" class="step-rail-item" data-step="2"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Align</span></button>
+                <button type="button" class="step-rail-item" data-step="3"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Analyze</span></button>
+                <button type="button" class="step-rail-item" data-step="4"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Clean-up</span></button>
+                <button type="button" class="step-rail-item" data-step="5"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Tune</span></button>
+                <button type="button" class="step-rail-item" data-step="6"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Mix</span></button>
             </nav>
 
     <!-- =====================================================
@@ -64,8 +79,7 @@
         <div class="step-heading">
             <span class="step-number">01</span>
             <div>
-                <h2>Upload your tracks</h2>
-                <p>Drop in a raw vocal and the instrumental. Everything else is measured from the audio.</p>
+                <h2>Upload your tracks <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Add a raw vocal and the instrumental. The rest of the pipeline measures from the audio.</span></span></h2>
             </div>
         </div>
 
@@ -95,8 +109,7 @@
         <div class="step-heading">
             <span class="step-number">02</span>
             <div>
-                <h2>Align your vocal</h2>
-                <p>Slide the vocal until it sits on the beat. Fine timing is handled later.</p>
+                <h2>Align your vocal <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Line the vocal up with the beat. Small timing fixes can still happen later in the pipeline.</span></span></h2>
             </div>
         </div>
 
@@ -134,9 +147,9 @@
             </div>
         </div>
 
-        <p class="timeline-hint">
-            Click the beat waveform or drag the white line to set the start.
-            Drag the blue vocal to move it.
+        <p class="control-with-tip">
+            <span class="control-tip-label">Timeline</span>
+            <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Tap the beat or drag the white line to set where playback starts. Drag the vocal waveform to line it up with the beat.</span></span>
         </p>
 
         <div class="alignment-controls">
@@ -156,7 +169,10 @@
                 <button type="button" class="chip-button" data-nudge="0.001">+1 ms</button>
                 <button type="button" class="chip-button" data-nudge="0.01">+10 ms</button>
             </div>
-            <p class="nudge-hint">Minus moves the vocal earlier. The beat never moves.</p>
+            <p class="control-with-tip">
+                <span class="control-tip-label">Position</span>
+                <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Minus moves the vocal earlier. Plus moves it later. The beat stays fixed.</span></span>
+            </p>
         </div>
 
         <div class="loop-controls">
@@ -208,8 +224,14 @@
                 <strong id="beat-bpm">—</strong>
                 <small id="beat-bpm-status">Waiting for analysis</small>
                 <div id="bpm-adjust" class="tempo-adjust hidden">
-                    <button id="bpm-half-button" class="chip-button" type="button" aria-label="Halve the detected BPM">÷ 2</button>
-                    <button id="bpm-double-button" class="chip-button" type="button" aria-label="Double the detected BPM">× 2</button>
+                    <button id="bpm-half-button" class="chip-button" type="button" aria-label="Half speed">Half speed</button>
+                    <button id="bpm-double-button" class="chip-button" type="button" aria-label="Double speed">Double speed</button>
+                    <span id="bpm-alt-chips" class="bpm-alt-chips" aria-label="Other tempo guesses"></span>
+                </div>
+                <div class="bpm-manual-row">
+                    <label for="analysis-manual-bpm" class="bpm-manual-label">Manual BPM</label>
+                    <input type="number" id="analysis-manual-bpm" min="40" max="240" step="0.1" placeholder="e.g. 92" inputmode="decimal" title="Only needed if detection is wrong. Many beat titles include this number.">
+                    <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Only if the detected speed feels wrong. Many beat files put the number in the file name.</span></span>
                 </div>
             </div>
             <div class="analysis-card">
@@ -263,10 +285,10 @@
             <label class="prep-option">
                 <input type="checkbox" id="prep-denoise">
                 <span>
-                    <strong>Reduce background noise</strong>
+                    <strong>Light noise cleanup</strong>
                     <small>
-                        Learns hiss and hum from the quiet parts and lowers it.
-                        Leave off if the room is part of the vibe.
+                        Gently lowers steady hiss from quiet parts. Kept light on purpose —
+                        heavy denoise can add static. Leave off if the room is part of the vibe.
                     </small>
                 </span>
             </label>
@@ -299,8 +321,9 @@
                 <span>
                     <strong>Beat tempo (BPM)</strong>
                     <small>
-                        Analysis did not find a tempo. Type the beat’s BPM to unlock
-                        speed matching and timing tighten.
+                        We couldn’t read the beat’s speed automatically. If the beat
+                        title shows a number (like 95 or 140), type it here to unlock
+                        timing tools — you don’t need to understand music theory.
                     </small>
                     <input type="number" id="prep-manual-bpm" min="40" max="240" step="0.1" placeholder="e.g. 90" style="max-width:8rem;margin-top:0.4rem;">
                 </span>
@@ -317,7 +340,10 @@
                 <button type="button" class="secondary-button" id="prep-play-after">▶ After</button>
                 <button type="button" class="secondary-button" id="prep-stop">■ Stop</button>
             </div>
-            <p class="nudge-hint">Switching keeps your place. The beat plays underneath.</p>
+            <p class="control-with-tip">
+                <span class="control-tip-label">A/B listen</span>
+                <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Switch between versions without losing your place. The beat keeps playing underneath.</span></span>
+            </p>
         </div>
 
         <button id="continue-from-prep-button" class="primary-button">
@@ -358,15 +384,27 @@
         </div>
 
         <div class="alignment-controls tune-controls">
+            <p class="control-with-tip simple-lead-row">
+                <span class="simple-lead">Pitch fix</span>
+                <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Defaults aim for a natural sound. Press Run Pitch Correction, check the result, then continue to Mix.</span></span>
+            </p>
             <div class="tune-row">
                 <label for="tune-strength">Correction strength</label>
                 <strong id="tune-strength-value">100%</strong>
                 <input type="range" id="tune-strength" class="tune-slider" min="0" max="100" value="100" step="1">
             </div>
+            <label class="tune-check">
+                <input type="checkbox" id="tune-selective" checked>
+                <span>
+                    Selective — only fix notes that are clearly off
+                    <small>Near-perfect notes stay as sung.</small>
+                </span>
+            </label>
+            <div class="pro-only">
             <div class="tune-row">
                 <label for="tune-retune">Retune speed</label>
-                <strong id="tune-retune-value">25 ms</strong>
-                <input type="range" id="tune-retune" class="tune-slider" min="0" max="150" value="25" step="5">
+                <strong id="tune-retune-value">30 ms</strong>
+                <input type="range" id="tune-retune" class="tune-slider" min="0" max="150" value="30" step="5">
             </div>
             <div class="tune-row">
                 <label for="tune-flatten">Flatten vibrato</label>
@@ -378,28 +416,25 @@
                 <strong id="tune-shift-value">0 (automatic)</strong>
                 <input type="range" id="tune-shift" class="tune-slider" min="-12" max="12" value="0" step="1">
             </div>
-
             <label class="tune-check">
                 <input type="checkbox" id="tune-auto-key" checked>
                 <span>
-                    If the vocal is in a different key from the beat, move the whole vocal into the beat’s key
+                    Match vocal key to the beat
                     <small id="tune-auto-note"></small>
                 </span>
             </label>
-
             <label class="tune-check">
-                <input type="checkbox" id="tune-selective" checked>
+                <input type="checkbox" id="tune-spoken">
                 <span>
-                    Selective — only fix notes that are clearly off
-                    <small>Near-perfect notes stay as sung. Best for a natural result at high strength.</small>
+                    Spoken to sung
+                    <small>Talk-sing lines pulled onto notes. Off by default.</small>
                 </span>
             </label>
-
-            <p class="nudge-hint">
-                Strength controls how far off notes are pulled. Selective leaves notes alone when they are already close.
-                Retune speed: lower is tighter, higher is smoother (25 ms is a solid default).
-                Flatten vibrato: 0% keeps it, 100% holds each note straight — keep lower for natural long notes.
+            <p class="control-with-tip">
+                <span class="control-tip-label">Advanced pitch</span>
+                <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Strength: how far notes are pulled. Retune speed: lower locks faster, higher sounds smoother. Flatten: keep lower so long notes still feel human.</span></span>
             </p>
+            </div>
         </div>
 
         <div class="loop-controls">
@@ -472,9 +507,9 @@
             <p class="pitch-position-display">
                 Position: <strong id="pitch-position">0:00</strong>
             </p>
-            <p class="nudge-hint">
-                A/B compare original and corrected at the same position.
-                Rewind to hear a phrase again, or enable the 4-second loop.
+            <p class="control-with-tip">
+                <span class="control-tip-label">Compare</span>
+                <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Compare original and corrected at the same spot. Use rewind or the short loop to check one phrase.</span></span>
             </p>
 
             <a id="tune-download" class="secondary-button tune-download" download="vocal-tuned.wav" href="#">
@@ -510,10 +545,11 @@
                     <option value="universal" selected>Universal</option>
                     <option value="afrobeats">Afrobeats / Amapiano</option>
                     <option value="trap">Trap / Drill</option>
+                    <option value="rap">Rap / Hip-Hop</option>
                     <option value="rnb">R&amp;B / Melodic</option>
                     <option value="clean">Clean / Natural</option>
                 </select>
-                <small id="mix-style-hint" class="mix-hint">Production character for the whole mix</small>
+                <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="About style" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Picks a production flavor for the whole mix (for example brighter, drier, or more punchy).</span></span>
             </div>
             <div class="mix-option">
                 <label for="mix-polish">Polish</label>
@@ -522,18 +558,35 @@
                     <option value="radio" selected>Radio</option>
                     <option value="aggressive">Aggressive</option>
                 </select>
-                <small class="mix-hint">How hard presence, warmth, and compression push</small>
+                <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="About polish" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">How hard the polish pushes clarity, warmth, and evening of the vocal.</span></span>
             </div>
             <div class="mix-option">
                 <label for="master-target">Loudness target</label>
                 <select id="master-target"></select>
             </div>
-            <div class="mix-option">
+            <div class="mix-option pro-only">
                 <label class="mix-check" for="beat-enhance">
                     <input type="checkbox" id="beat-enhance" checked>
                     Auto-enhance beat
                 </label>
-                <small class="mix-hint">Balances kick, hats, chords &amp; tone only where the beat needs it</small>
+                <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="About beat enhance" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Gently balances drums and tone on the beat only where it needs help.</span></span>
+            </div>
+            <div class="mix-option">
+                <label class="mix-check" for="fill-instruments">
+                    <input type="checkbox" id="fill-instruments">
+                    Fill missing instruments
+                </label>
+                <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="About fill" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Optional. If the beat feels empty, adds simple supportive layers (kick, hats, bass, pad, piano, strings) locked to the song tempo and key. Mixed under the real beat.</span></span>
+            </div>
+
+            <div class="mix-option">
+                <label for="mix-balance">Vocal vs beat</label>
+                <select id="mix-balance">
+                    <option value="closer">Closer to beat</option>
+                    <option value="balanced" selected>Balanced</option>
+                    <option value="forward">Vocal forward</option>
+                </select>
+                <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="About balance" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">How loud the voice sits against the beat: closer, balanced, or more forward.</span></span>
             </div>
             <div class="mix-option">
                 <label for="export-format">Export</label>
@@ -543,6 +596,11 @@
                 </select>
             </div>
             <div class="mix-option mix-option-wide">
+                <label for="export-filename">File name</label>
+                <input type="text" id="export-filename" class="export-filename" placeholder="My song name" maxlength="80" autocomplete="off">
+                <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="About file name" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Optional. Leave blank to use the default file name.</span></span>
+            </div>
+            <div class="mix-option mix-option-wide pro-only">
                 <label for="harmony-select">Higher harmony</label>
                 <select id="harmony-select">
                     <option value="0" selected>Off</option>
@@ -553,23 +611,28 @@
             </div>
         </div>
 
-        <button id="automix-button" class="primary-button">Mix &amp; Master</button>
+        <button id="automix-button" class="primary-button mix-run-btn">
+            <svg class="btn-ico" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 2.5v9l8-4.5L3 2.5z" fill="currentColor"/></svg>
+            Mix &amp; Master
+        </button>
         <p id="automix-status" class="timeline-hint" aria-live="polite"></p>
-        <audio id="mix-audio-player" class="mix-player" controls></audio>
 
-        <div id="mix-compare" class="hidden mix-compare">
-            <h3>Before and after, at the same loudness</h3>
-            <div class="alignment-actions tune-play">
-                <button type="button" class="secondary-button" id="mix-play-before">▶ Before</button>
-                <button type="button" class="secondary-button" id="mix-play-after">▶ After</button>
-                <button type="button" class="secondary-button" id="mix-stop">■ Stop</button>
+        <div id="mix-result" class="mix-result">
+            <h3 class="mix-result-title">Your mix</h3>
+            <audio id="mix-audio-player" class="mix-player" controls></audio>
+            <a id="mix-download" class="primary-button tune-download mix-download-btn hidden" download="vocal-vault-master.wav" href="#">
+                Download final mix
+            </a>
+            <div id="mix-compare" class="hidden mix-compare">
+                <h4>Before and after</h4>
+                <div class="alignment-actions tune-play">
+                    <button type="button" class="secondary-button" id="mix-play-before">Before</button>
+                    <button type="button" class="secondary-button" id="mix-play-after">After</button>
+                    <button type="button" class="secondary-button" id="mix-stop">Stop</button>
+                </div>
+                <p id="mix-compare-info" class="nudge-hint"></p>
             </div>
-            <p id="mix-compare-info" class="nudge-hint"></p>
         </div>
-
-        <a id="mix-download" class="secondary-button tune-download hidden" download="vocal-vault-master.wav" href="#">
-            Download final mix (WAV)
-        </a>
     </section>
 
 
@@ -599,8 +662,11 @@
                         <option value="harmony">Harmony</option>
                         <option value="other">Other</option>
                     </select>
-                    <button type="button" id="studio-to-pipeline" class="primary-button studio-tool-btn studio-send">
-                        Send to Pipeline →
+                    <button type="button" id="studio-import-audio" class="secondary-button studio-tool-btn" title="Import an existing vocal file onto the armed lane (or a new lane)">Import audio</button>
+                    <input type="file" id="studio-import-input" accept="audio/*" multiple hidden>
+                    <button type="button" id="studio-to-pipeline" class="primary-button studio-tool-btn studio-send" title="Composite lanes and open Pipeline to finish">
+                        <svg class="btn-ico" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M2 7h8M7 3l4 4-4 4" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                        Send mix to Pipeline
                     </button>
                 </div>
             </div>
@@ -620,8 +686,17 @@
                 </div>
 
                 <div id="studio-empty" class="studio-empty">
-                    <p>Load a beat, add vocal lanes, then hit Record.</p>
-                    <span>Recording always plays the beat from the playhead — start anywhere in the song. Add lanes for main, adlibs, tags.</span>
+                    <p class="studio-empty-title">Start a session</p>
+                    <ol class="studio-guide">
+                        <li><span class="guide-num">1</span> Load a beat</li>
+                        <li><span class="guide-num">2</span> Add a Main vocal lane</li>
+                        <li><span class="guide-num">3</span> Record or import audio</li>
+                        <li><span class="guide-num">4</span> Send mix to Pipeline to finish</li>
+                    </ol>
+                    <p class="control-with-tip studio-empty-tip">
+                        <span class="control-tip-label">Mix levels</span>
+                        <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Adlibs and tags default to Auto levels under the main vocal. Change any lane if you want it louder or quieter.</span></span>
+                    </p>
                 </div>
             </div>
 
@@ -671,6 +746,7 @@
 <script src="levelmatch.js"></script>
 <script src="presets.js"></script>
 <script src="automix.js"></script>
+<script src="fill.js"></script>
 <script src="prep.js"></script>
 <script src="tune.js"></script>
 <script src="mixui.js"></script>
@@ -679,8 +755,10 @@
 <script>
 (function () {
     const rail = document.getElementById("step-rail");
+    const shell = document.getElementById("app-shell");
     if (!rail) return;
     const items = [...rail.querySelectorAll(".step-rail-item")];
+    const names = { 1: "Upload", 2: "Align", 3: "Analyze", 4: "Clean-up", 5: "Tune", 6: "Mix" };
     const map = {
         "upload-section": 1,
         "alignment-section": 2,
@@ -689,6 +767,25 @@
         "tune-section": 5,
         "mix-section": 6
     };
+    const sectionIds = Object.keys(map);
+
+    items.forEach((item) => {
+        const ico = item.querySelector(".step-ico");
+        if (ico) ico.setAttribute("data-n", item.dataset.step);
+    });
+
+    function showSection(step) {
+        sectionIds.forEach((id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const n = map[id];
+            el.classList.toggle("hidden", n !== step);
+        });
+        refresh();
+        const target = document.getElementById(sectionIds.find((id) => map[id] === step) || "upload-section");
+        if (target) target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+
     function refresh() {
         let current = 1;
         for (const [id, n] of Object.entries(map)) {
@@ -699,14 +796,207 @@
             const n = +item.dataset.step;
             item.classList.toggle("is-active", n === current);
             item.classList.toggle("is-done", n < current);
+            item.classList.toggle("is-clickable", n <= current);
+            item.disabled = n > current;
         });
+        const pc = document.getElementById("progress-current");
+        const pn = document.getElementById("progress-name");
+        if (pc) pc.textContent = String(current);
+        if (pn) pn.textContent = names[current] || "";
+
+        // Sticky CTA mirrors the visible section primary button
+        const sticky = document.getElementById("pipeline-sticky-cta");
+        const stickyBtn = document.getElementById("sticky-cta-btn");
+        const stickyLabel = document.getElementById("sticky-cta-label");
+        const sectionId = sectionIds.find((id) => map[id] === current);
+        const section = sectionId && document.getElementById(sectionId);
+        const primary = section && section.querySelector(".primary-button:not([hidden])");
+        if (sticky && stickyBtn) {
+            if (primary && current < 6) {
+                sticky.hidden = false;
+                stickyLabel.textContent = primary.textContent.trim();
+                stickyBtn.textContent = primary.textContent.trim();
+                stickyBtn.onclick = function () { primary.click(); };
+            } else if (current === 6) {
+                sticky.hidden = true;
+            } else {
+                sticky.hidden = true;
+            }
+        }
+
+        // Highlight mix result when player has a source
+        const mixResult = document.getElementById("mix-result");
+        const player = document.getElementById("mix-audio-player");
+        if (mixResult && player) {
+            mixResult.classList.toggle("has-mix", !!(player.src || player.dataset.url));
+        }
     }
+
+    items.forEach((item) => {
+        item.addEventListener("click", () => {
+            const n = +item.dataset.step;
+            if (n && item.classList.contains("is-clickable")) showSection(n);
+        });
+    });
+
+    // Simple / Pro
+    function setUx(mode) {
+        if (!shell) return;
+        shell.classList.toggle("ux-simple", mode === "simple");
+        shell.classList.toggle("ux-pro", mode === "pro");
+        document.querySelectorAll(".ux-btn").forEach((b) => {
+            b.classList.toggle("is-active", b.dataset.ux === mode);
+        });
+        try { localStorage.setItem("vv-ux-mode", mode); } catch (e) {}
+    }
+    document.querySelectorAll(".ux-btn").forEach((b) => {
+        b.addEventListener("click", () => setUx(b.dataset.ux));
+    });
+    try {
+        const saved = localStorage.getItem("vv-ux-mode");
+        if (saved === "pro" || saved === "simple") setUx(saved);
+    } catch (e) {}
+
     const obs = new MutationObserver(refresh);
     Object.keys(map).forEach((id) => {
         const el = document.getElementById(id);
         if (el) obs.observe(el, { attributes: true, attributeFilter: ["class"] });
     });
+    const player = document.getElementById("mix-audio-player");
+    if (player) {
+        const mo = new MutationObserver(refresh);
+        mo.observe(player, { attributes: true, attributeFilter: ["src"] });
+    }
     refresh();
+})();
+</script>
+
+<script>
+(function () {
+    function closeAllTips(except) {
+        document.querySelectorAll(".info-tip.is-open").forEach((tip) => {
+            if (except && tip === except) return;
+            tip.classList.remove("is-open", "info-tip-above", "info-tip-end");
+            const btn = tip.querySelector(".info-tip-btn");
+            if (btn) btn.setAttribute("aria-expanded", "false");
+        });
+    }
+
+    function placePanel(tip) {
+        tip.classList.remove("info-tip-above", "info-tip-end");
+        const panel = tip.querySelector(".info-tip-panel");
+        if (!panel) return;
+        const rect = tip.getBoundingClientRect();
+        const spaceBelow = window.innerHeight - rect.bottom;
+        const spaceRight = window.innerWidth - rect.left;
+        if (spaceBelow < 120) tip.classList.add("info-tip-above");
+        if (spaceRight < 200) tip.classList.add("info-tip-end");
+    }
+
+    document.addEventListener("click", (e) => {
+        const btn = e.target.closest && e.target.closest(".info-tip-btn");
+        // SVG clicks: closest from target
+        const t = e.target;
+        const btn2 = btn || (t && t.closest && t.closest(".info-tip-btn"));
+        if (btn2) {
+            e.preventDefault();
+            e.stopPropagation();
+            const tip = btn2.closest(".info-tip");
+            if (!tip) return;
+            const open = tip.classList.contains("is-open");
+            closeAllTips();
+            if (!open) {
+                placePanel(tip);
+                tip.classList.add("is-open");
+                btn2.setAttribute("aria-expanded", "true");
+            }
+            return;
+        }
+        if (e.target.closest && e.target.closest(".info-tip-panel")) {
+            e.stopPropagation();
+            return;
+        }
+        closeAllTips();
+    });
+
+    document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeAllTips();
+    });
+})();
+</script>
+
+
+<!-- Vocal Vault modal -->
+<div id="vv-modal" class="vv-modal" hidden aria-hidden="true">
+    <div class="vv-modal-backdrop" data-vv-modal-dismiss></div>
+    <div class="vv-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="vv-modal-title">
+        <h2 id="vv-modal-title" class="vv-modal-title">Notice</h2>
+        <p id="vv-modal-message" class="vv-modal-message"></p>
+        <div class="vv-modal-actions">
+            <button type="button" id="vv-modal-cancel" class="secondary-button vv-modal-cancel" hidden>Cancel</button>
+            <button type="button" id="vv-modal-ok" class="primary-button">OK</button>
+        </div>
+    </div>
+</div>
+
+
+<script>
+(function () {
+    const root = document.getElementById("vv-modal");
+    if (!root) return;
+    const titleEl = document.getElementById("vv-modal-title");
+    const msgEl = document.getElementById("vv-modal-message");
+    const okBtn = document.getElementById("vv-modal-ok");
+    const cancelBtn = document.getElementById("vv-modal-cancel");
+    let resolver = null;
+
+    function close(result) {
+        root.hidden = true;
+        root.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("vv-modal-open");
+        const r = resolver;
+        resolver = null;
+        if (r) r(result);
+    }
+
+    function open(opts) {
+        const o = opts || {};
+        titleEl.textContent = o.title || (o.confirm ? "Confirm" : "Notice");
+        msgEl.textContent = o.message || "";
+        okBtn.textContent = o.okLabel || "OK";
+        cancelBtn.hidden = !o.confirm;
+        cancelBtn.textContent = o.cancelLabel || "Cancel";
+        root.hidden = false;
+        root.setAttribute("aria-hidden", "false");
+        document.body.classList.add("vv-modal-open");
+        setTimeout(() => okBtn.focus(), 30);
+        return new Promise((resolve) => { resolver = resolve; });
+    }
+
+    okBtn.addEventListener("click", () => close(true));
+    cancelBtn.addEventListener("click", () => close(false));
+    root.querySelector("[data-vv-modal-dismiss]").addEventListener("click", () => {
+        close(cancelBtn.hidden ? true : false);
+    });
+    document.addEventListener("keydown", (e) => {
+        if (root.hidden) return;
+        if (e.key === "Escape") {
+            e.preventDefault();
+            close(cancelBtn.hidden ? true : false);
+        } else if (e.key === "Enter" && document.activeElement !== cancelBtn) {
+            e.preventDefault();
+            close(true);
+        }
+    });
+
+    window.VocalVaultModal = {
+        alert: function (message, title) {
+            return open({ message: String(message || ""), title: title || "Notice", confirm: false });
+        },
+        confirm: function (message, title) {
+            return open({ message: String(message || ""), title: title || "Confirm", confirm: true });
+        }
+    };
 })();
 </script>
 

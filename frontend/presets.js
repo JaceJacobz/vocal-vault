@@ -10,12 +10,12 @@
             id: "universal",
             label: "Universal",
             blurb: "Balanced default — safe on most songs",
-            presenceDb: 1.5,
-            airDb: 2.0,
-            cutStrength: 0.6,
-            boostStrength: 0.4,
-            sat: { drive: 2.0, mix: 0.2 },
-            vocalAboveBeatDb: 1.5,
+            presenceDb: 1.15,
+            airDb: 1.4,
+            cutStrength: 0.62,
+            boostStrength: 0.38,
+            sat: { drive: 1.3, mix: 0.07 },
+            vocalAboveBeatDb: 0.21,
             compressTightenDb: 0,
             reverbScale: 1,
             echoScale: 1,
@@ -31,12 +31,12 @@
             id: "afrobeats",
             label: "Afrobeats / Amapiano",
             blurb: "Bright top, tight low-mids, shorter space, forward vocal",
-            presenceDb: 2.3,
-            airDb: 3.2,
+            presenceDb: 2.1,
+            airDb: 2.9,
             cutStrength: 0.72,
             boostStrength: 0.55,
-            sat: { drive: 2.4, mix: 0.28 },
-            vocalAboveBeatDb: 2.2,
+            sat: { drive: 1.55, mix: 0.11 },
+            vocalAboveBeatDb: 0.42,
             compressTightenDb: 1.5,
             reverbScale: 0.72,
             echoScale: 0.85,
@@ -52,12 +52,12 @@
             id: "trap",
             label: "Trap / Drill",
             blurb: "Harder compression, more grit, louder vocal, darker space",
-            presenceDb: 2.1,
-            airDb: 1.3,
+            presenceDb: 1.9,
+            airDb: 1.2,
             cutStrength: 0.75,
             boostStrength: 0.5,
-            sat: { drive: 3.1, mix: 0.36 },
-            vocalAboveBeatDb: 2.8,
+            sat: { drive: 1.6, mix: 0.12 },
+            vocalAboveBeatDb: 0.5,
             compressTightenDb: 3,
             reverbScale: 0.55,
             echoScale: 0.65,
@@ -69,16 +69,37 @@
             beatEnhanceStrength: 1.25,
             suggestedLufs: -9
         },
+        rap: {
+            id: "rap",
+            label: "Rap / Hip-Hop",
+            blurb: "Dry, punchy, lyric-forward — clear midrange, tight space, sits on top of the beat",
+            presenceDb: 2.35,
+            airDb: 1.65,
+            cutStrength: 0.78,
+            boostStrength: 0.52,
+            sat: { drive: 1.5, mix: 0.1 },
+            vocalAboveBeatDb: 0.5,
+            compressTightenDb: 2.4,
+            reverbScale: 0.42,
+            echoScale: 0.55,
+            reverbBelowAdd: 4,
+            echoBelowAdd: 2.5,
+            midDuckScale: 1.3,
+            preferDoubler: false,
+            forceMinimalFx: false,
+            beatEnhanceStrength: 1.2,
+            suggestedLufs: -10
+        },
         rnb: {
             id: "rnb",
             label: "R&B / Melodic",
             blurb: "Softer dynamics, longer plate, gentle width",
-            presenceDb: 1.9,
-            airDb: 2.6,
+            presenceDb: 1.7,
+            airDb: 2.35,
             cutStrength: 0.55,
             boostStrength: 0.45,
-            sat: { drive: 1.85, mix: 0.18 },
-            vocalAboveBeatDb: 1.3,
+            sat: { drive: 1.35, mix: 0.09 },
+            vocalAboveBeatDb: 0.24,
             compressTightenDb: -1.2,
             reverbScale: 1.3,
             echoScale: 1.15,
@@ -98,8 +119,8 @@
             airDb: 1.0,
             cutStrength: 0.45,
             boostStrength: 0.28,
-            sat: { drive: 1.4, mix: 0.08 },
-            vocalAboveBeatDb: 1.0,
+            sat: { drive: 1.25, mix: 0.06 },
+            vocalAboveBeatDb: 0.21,
             compressTightenDb: -2,
             reverbScale: 0.45,
             echoScale: 0.5,
@@ -122,7 +143,7 @@
             satMixMul: 0.65,
             satDriveMul: 0.85,
             compressMul: 0.7,
-            vocalAboveAdd: -0.3,
+            vocalAboveAdd: -0.4,
             doubleBias: -1,
             spaceDbAdd: 2,
             beatMul: 0.85
@@ -130,12 +151,12 @@
         radio: {
             id: "radio",
             label: "Radio",
-            presenceMul: 1.15,
-            airMul: 1.2,
-            satMixMul: 1.15,
-            satDriveMul: 1.1,
-            compressMul: 1.05,
-            vocalAboveAdd: 0.4,
+            presenceMul: 1.05,
+            airMul: 1.0,
+            satMixMul: 0.95,
+            satDriveMul: 0.95,
+            compressMul: 1.1,
+            vocalAboveAdd: 0.1,
             doubleBias: 1,
             spaceDbAdd: 0,
             beatMul: 1
@@ -143,12 +164,12 @@
         aggressive: {
             id: "aggressive",
             label: "Aggressive",
-            presenceMul: 1.4,
-            airMul: 1.45,
-            satMixMul: 1.45,
-            satDriveMul: 1.35,
+            presenceMul: 1.32,
+            airMul: 1.35,
+            satMixMul: 1.05,
+            satDriveMul: 1.05,
             compressMul: 1.3,
-            vocalAboveAdd: 1.2,
+            vocalAboveAdd: 0.4,
             doubleBias: 1,
             spaceDbAdd: -1.5,
             beatMul: 1.15
@@ -164,21 +185,21 @@
         const polish = POLISH[polishId] || POLISH.radio;
 
         const presenceDb = clamp(style.presenceDb * polish.presenceMul, 0, 4);
-        const airDb = clamp(style.airDb * polish.airMul, 0, 4.5);
+        const airDb = clamp(style.airDb * polish.airMul, 0, 4.0);
         const sat = {
-            drive: clamp(style.sat.drive * polish.satDriveMul, 1.2, 4.5),
-            mix: clamp(style.sat.mix * polish.satMixMul, 0.04, 0.48)
+            drive: clamp(style.sat.drive * polish.satDriveMul, 1.1, 2.2),
+            mix: clamp(style.sat.mix * polish.satMixMul, 0.03, 0.18)
         };
         const compressTightenDb = style.compressTightenDb * polish.compressMul;
         const vocalAboveBeatDb = clamp(
             style.vocalAboveBeatDb + polish.vocalAboveAdd,
             -2,
-            5
+            1.5
         );
 
         let preferDoubler = style.preferDoubler;
         if (polish.doubleBias > 0 && preferDoubler === null) preferDoubler = true;
-        if (polish.doubleBias > 0 && preferDoubler === false && style.id !== "clean" && style.id !== "trap") {
+        if (polish.doubleBias > 0 && preferDoubler === false && style.id !== "clean" && style.id !== "trap" && style.id !== "rap") {
             preferDoubler = true;
         }
         if (polish.doubleBias < 0 && preferDoubler === true) preferDoubler = null;

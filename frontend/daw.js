@@ -29,6 +29,93 @@
         beat: "#8b5cf6"
     };
 
+    // Relative level of each lane in the composite sent to Pipeline / mix.
+    // "auto" listens to the take and places it vs the main vocal.
+    const MIX_LEVELS = {
+        auto:    { label: "Auto",    db: null, blurb: "Vocal Vault picks the level from the take (best for most people)" },
+        lead:    { label: "Lead",    db: 0,    blurb: "Primary — full level in the mix" },
+        same:    { label: "Same",    db: 0,    blurb: "Same relative level as the lead" },
+        quieter: { label: "Quieter", db: -6.5, blurb: "Sit under the lead (typical for adlibs)" },
+        louder:  { label: "Louder",  db: 3.0,  blurb: "Push above the lead (shouts / tags)" },
+        mute:    { label: "Mute",    db: null, blurb: "Skip this lane in the composite" }
+    };
+
+    // Target level vs the main vocal (dB) when Mix is Auto
+    const AUTO_TARGET_DB = {
+        main: 0,
+        adlib: -6.0,
+        tag: -7.5,
+        harmony: -4.5,
+        other: -3.5
+    };
+
+    const HARMONY_INTERVALS = {
+        0: { label: "Off (use take as-is)", degrees: 0 },
+        2: { label: "3rd above (in key)", degrees: 2 },
+        4: { label: "5th above (in key)", degrees: 4 },
+        7: { label: "Octave above", degrees: 7 }
+    };
+
+    function defaultMixLevel(type) {
+        return "auto";
+    }
+
+    function laneRmsDb(lane) {
+        let e = 0, n = 0;
+        for (const clip of (lane.clips || [])) {
+            if (!clip.buffer) continue;
+            const ch = clip.buffer.getChannelData(0);
+            // Sample sparsely for speed
+            const step = Math.max(1, Math.floor(ch.length / 8000));
+            for (let i = 0; i < ch.length; i += step) {
+                const v = ch[i];
+                e += v * v;
+                n++;
+            }
+        }
+        if (!n) return -120;
+        return 20 * Math.log10(Math.sqrt(e / n) + 1e-12);
+    }
+
+    function findMainLane() {
+        const withClips = lanes.filter((l) => l.clips.length);
+        const main = withClips.find((l) => l.type === "main");
+        return main || withClips[0] || null;
+    }
+
+    /** Resolve linear gain for a lane (Auto listens; manual uses fixed dB). */
+    function resolveLaneGain(lane, mainDb) {
+        const key = lane.mixLevel || defaultMixLevel(lane.type);
+        if (key === "mute") return { lin: 0, db: null, key: "mute", label: "Mute" };
+        if (key !== "auto") {
+            const meta = MIX_LEVELS[key] || MIX_LEVELS.same;
+            const db = meta.db == null ? 0 : meta.db;
+            return { lin: Math.pow(10, db / 20), db, key, label: meta.label };
+        }
+        // Auto: place this take relative to the main vocal's measured level
+        const myDb = laneRmsDb(lane);
+        const targetRel = AUTO_TARGET_DB[lane.type] != null ? AUTO_TARGET_DB[lane.type] : -3.5;
+        const ref = (mainDb != null && mainDb > -100) ? mainDb : myDb;
+        // For the main lane itself, leave near unity (only tiny trim if absurdly hot)
+        let gainDb;
+        if (lane.type === "main" || lane === findMainLane()) {
+            gainDb = 0;
+            // If main is very quiet vs a dense stack, still leave at 0
+        } else {
+            gainDb = (ref + targetRel) - myDb;
+            // Clamp so we never destroy a take or blast it
+            if (gainDb > 4) gainDb = 4;
+            if (gainDb < -12) gainDb = -12;
+        }
+        const label = "Auto " + (gainDb >= 0 ? "+" : "") + gainDb.toFixed(1) + " dB";
+        return { lin: Math.pow(10, gainDb / 20), db: gainDb, key: "auto", label };
+    }
+
+    function mainReferenceDb() {
+        const main = findMainLane();
+        return main ? laneRmsDb(main) : -120;
+    }
+
     let lanes = [];
     let beat = { file: null, buffer: null, name: null, duration: 0 };
 
@@ -69,6 +156,8 @@
         els.loadBeat = $("studio-load-beat");
         els.addLane = $("studio-add-lane");
         els.laneType = $("studio-lane-type");
+        els.importAudio = $("studio-import-audio");
+        els.importInput = $("studio-import-input");
         els.toPipeline = $("studio-to-pipeline");
         els.trPlay = $("tr-play");
         els.trStop = $("tr-stop");
@@ -196,6 +285,68 @@
         }
     }
 
+    async function importAudioFiles(fileList) {
+        const files = Array.from(fileList || []).filter((f) => f && f.type && f.type.indexOf("audio") === 0);
+        // Some browsers omit type for .wav — still try by extension
+        const more = Array.from(fileList || []).filter((f) => {
+            if (!f || files.indexOf(f) >= 0) return false;
+            return /\.(wav|mp3|m4a|aac|ogg|flac|webm)$/i.test(f.name || "");
+        });
+        const all = files.concat(more);
+        if (!all.length) {
+            status("No audio files selected");
+            return;
+        }
+
+        const ctx = ensureCtx();
+        let target = lanes.find((l) => l.armed);
+        // If nothing armed, create a lane matching the toolbar type
+        if (!target) {
+            addLane(els.laneType?.value || "main");
+            target = lanes.find((l) => l.armed) || lanes[lanes.length - 1];
+        }
+
+        let placed = 0;
+        for (let i = 0; i < all.length; i++) {
+            const file = all[i];
+            // First file goes on the armed lane; extra files each get their own lane
+            let lane = target;
+            if (i > 0) {
+                addLane(els.laneType?.value || target.type || "main");
+                lane = lanes.find((l) => l.armed) || lanes[lanes.length - 1];
+            }
+            if (!lane) continue;
+
+            try {
+                status("Importing " + file.name + "…");
+                const ab = await file.arrayBuffer();
+                const buffer = await ctx.decodeAudioData(ab.slice(0));
+                const start = playhead; // land at playhead so you can place adlibs mid-song
+                const takeNum = lane.clips.length + 1;
+                lane.clips.push({
+                    id: uid(),
+                    name: file.name.replace(/\.[^.]+$/, "") || ("Import " + takeNum),
+                    blob: file,
+                    file,
+                    buffer,
+                    start,
+                    duration: buffer.duration
+                });
+                placed++;
+            } catch (e) {
+                console.warn("import failed", file.name, e);
+                status("Could not decode " + file.name);
+            }
+        }
+
+        renderLanes();
+        updateTotals();
+        refreshRoles();
+        if (placed) {
+            status("Imported " + placed + " file(s) @ " + fmt(playhead) + " — set Mix level, then Send to Pipeline");
+        }
+    }
+
     function addLane(type) {
         if (lanes.length >= MAX_LANES) {
             status("Max " + MAX_LANES + " lanes");
@@ -211,7 +362,9 @@
             color: COLORS[type] || COLORS.other,
             clips: [],
             armed: true,
-            muted: false
+            muted: false,
+            mixLevel: defaultMixLevel(type),
+            harmonyDegrees: type === "harmony" ? 2 : 0
         };
         lanes.forEach((l) => (l.armed = false));
         lanes.push(lane);
@@ -238,6 +391,31 @@
             l.name = name.trim();
             renderLanes();
         }
+    }
+
+    function setMixLevel(id, level) {
+        const l = lanes.find((x) => x.id === id);
+        if (!l || !MIX_LEVELS[level]) return;
+        l.mixLevel = level;
+        renderLanes();
+        const meta = MIX_LEVELS[level];
+        if (level === "auto") {
+            const mainDb = mainReferenceDb();
+            const g = resolveLaneGain(l, mainDb);
+            status(l.name + " → Auto (about " + (g.db >= 0 ? "+" : "") + (g.db != null ? g.db.toFixed(1) : "0") + " dB vs main)");
+        } else {
+            status(l.name + " → " + meta.label + (meta.db == null ? " (skipped in mix)" : " (" + (meta.db >= 0 ? "+" : "") + meta.db + " dB)"));
+        }
+    }
+
+    function setHarmonyDegrees(id, degrees) {
+        const l = lanes.find((x) => x.id === id);
+        if (!l) return;
+        const d = parseInt(degrees, 10) || 0;
+        l.harmonyDegrees = d;
+        renderLanes();
+        const meta = HARMONY_INTERVALS[d] || HARMONY_INTERVALS[0];
+        status(l.name + " harmony: " + meta.label + (d ? " — builds on Send to Pipeline" : ""));
     }
 
     function renderLanes() {
@@ -274,12 +452,49 @@
             const row = document.createElement("div");
             row.className = "studio-lane" + (lane.armed ? " is-armed" : "");
             row.dataset.laneId = lane.id;
+            const level = lane.mixLevel || defaultMixLevel(lane.type);
+            let levelOpts = "";
+            for (const key of Object.keys(MIX_LEVELS)) {
+                const m = MIX_LEVELS[key];
+                levelOpts += '<option value="' + key + '"' + (key === level ? " selected" : "") + ">" + m.label + "</option>";
+            }
+            let autoHint = "";
+            if (level === "auto" && lane.clips.length) {
+                const g = resolveLaneGain(lane, mainReferenceDb());
+                if (g.db != null) {
+                    autoHint = '<small class="lane-auto-hint">' +
+                        (g.db === 0 ? "Auto: lead level" : ("Auto: " + (g.db > 0 ? "+" : "") + g.db.toFixed(1) + " dB")) +
+                        "</small>";
+                }
+            }
+            let harmHtml = "";
+            if (lane.type === "harmony") {
+                const deg = lane.harmonyDegrees != null ? lane.harmonyDegrees : 2;
+                let hOpts = "";
+                for (const k of Object.keys(HARMONY_INTERVALS)) {
+                    const m = HARMONY_INTERVALS[k];
+                    hOpts += '<option value="' + k + '"' + (String(deg) === String(k) ? " selected" : "") + ">" + m.label + "</option>";
+                }
+                harmHtml =
+                    '<div class="lane-harmony-wrap" title="Optional: build a harmony in the song key">' +
+                    '<label class="lane-level-label">Harmony</label>' +
+                    '<select class="lane-harmony-select" data-act="harmony">' + hOpts + "</select>" +
+                    "</div>";
+            }
             row.innerHTML =
                 '<div class="studio-lane-head">' +
                 '<span class="lane-color" style="background:' + lane.color + '"></span>' +
                 '<div class="lane-meta">' +
                 '<input class="lane-name-input" value="' + escapeAttr(lane.name) + '">' +
                 "<small>" + lane.type + (lane.armed ? " · armed" : "") + "</small>" +
+                '</div>' +
+                '<div class="lane-level-wrap" title="' + escapeAttr(MIX_LEVELS[level].blurb) + '">' +
+                '<label class="lane-level-label">Mix</label>' +
+                '<select class="lane-level-select" data-act="level" aria-label="Mix level for ' + escapeAttr(lane.name) + '">' +
+                levelOpts +
+                "</select>" +
+                autoHint +
+                harmHtml +
                 "</div>" +
                 '<div class="lane-btns">' +
                 '<button type="button" class="lane-btn' + (lane.armed ? " is-on" : "") + '" data-act="arm" title="Arm for record">R</button>' +
@@ -304,11 +519,29 @@
 
             row.querySelector('[data-act="arm"]').addEventListener("click", () => armLane(lane.id));
             row.querySelector('[data-act="del"]').addEventListener("click", () => {
-                if (confirm("Delete lane \u201c" + lane.name + "\u201d?")) removeLane(lane.id);
+                (async function () {
+                    const ok = window.VocalVaultModal
+                        ? await window.VocalVaultModal.confirm(
+                            "Delete lane \u201c" + lane.name + "\u201d? This cannot be undone.",
+                            "Delete lane"
+                        )
+                        : true;
+                    if (ok) removeLane(lane.id);
+                })();
             });
             row.querySelector(".lane-name-input").addEventListener("change", (e) => {
                 renameLane(lane.id, e.target.value);
             });
+            const levelSel = row.querySelector('[data-act="level"]');
+            if (levelSel) {
+                levelSel.addEventListener("change", (e) => setMixLevel(lane.id, e.target.value));
+                levelSel.addEventListener("click", (e) => e.stopPropagation());
+            }
+            const harmSel = row.querySelector('[data-act="harmony"]');
+            if (harmSel) {
+                harmSel.addEventListener("change", (e) => setHarmonyDegrees(lane.id, e.target.value));
+                harmSel.addEventListener("click", (e) => e.stopPropagation());
+            }
 
             track.addEventListener("click", (e) => {
                 if (isRecording) return;
@@ -448,8 +681,12 @@
             activeSources.push(src);
         }
 
+        const mainDb = mainReferenceDb();
         lanes.forEach((lane) => {
             if (lane.muted) return;
+            const resolved = resolveLaneGain(lane, mainDb);
+            if (resolved.key === "mute" || resolved.lin <= 0) return;
+            const levelLin = resolved.lin;
             lane.clips.forEach((clip) => {
                 if (!clip.buffer) return;
                 const clipEnd = clip.start + clip.duration;
@@ -458,7 +695,7 @@
                 const src = ctx.createBufferSource();
                 src.buffer = clip.buffer;
                 const gain = ctx.createGain();
-                gain.gain.value = g;
+                gain.gain.value = g * levelLin;
                 src.connect(gain);
                 gain.connect(ctx.destination);
 
@@ -797,7 +1034,7 @@
         else startRecording();
     }
 
-    async function renderLaneToFile(lane) {
+    async function renderLaneToFile(lane, gainDb) {
         if (!lane.clips.length) return null;
         const sr = beat.buffer?.sampleRate || lane.clips[0].buffer?.sampleRate || 44100;
         const dur = Math.max(
@@ -805,18 +1042,176 @@
             ...lane.clips.map((c) => c.start + c.duration)
         );
         const offline = new OfflineAudioContext(1, Math.ceil(dur * sr) || sr, sr);
+        const gLin = typeof gainDb === "number" ? Math.pow(10, gainDb / 20) : 1;
 
         for (const clip of lane.clips) {
             if (!clip.buffer) continue;
             const src = offline.createBufferSource();
             src.buffer = clip.buffer;
-            src.connect(offline.destination);
+            const gain = offline.createGain();
+            gain.gain.value = gLin;
+            src.connect(gain);
+            gain.connect(offline.destination);
             src.start(Math.max(0, clip.start));
         }
 
         const rendered = await offline.startRendering();
         const wav = audioBufferToWav(rendered);
         return new File([wav], lane.name.replace(/\s+/g, "_") + "_comp.wav", { type: "audio/wav" });
+    }
+
+
+    function channelsFromBuffer(buf) {
+        const out = [];
+        for (let c = 0; c < buf.numberOfChannels; c++) out.push(buf.getChannelData(c));
+        return out;
+    }
+
+    function bufferFromChannels(channels, sr) {
+        const n = channels[0].length;
+        const ch = channels.length;
+        const buf = typeof AudioBuffer !== "undefined"
+            ? new (window.AudioBuffer || AudioBuffer)({ length: n, numberOfChannels: ch, sampleRate: sr })
+            : null;
+        // OfflineAudioContext path (widely supported)
+        const offline = new OfflineAudioContext(ch, n, sr);
+        const b = offline.createBuffer(ch, n, sr);
+        for (let c = 0; c < ch; c++) b.copyToChannel(Float32Array.from(channels[c]), c);
+        return b;
+    }
+
+    function keyOptionsForHarmony() {
+        const S = window.state || {};
+        let rootPc = 0, scale = "major", refCents = 0;
+        if (S.tuneOptions) {
+            if (S.tuneOptions.rootPc != null) rootPc = S.tuneOptions.rootPc;
+            if (S.tuneOptions.scale) scale = S.tuneOptions.scale;
+            if (S.tuneOptions.refCents != null) refCents = S.tuneOptions.refCents;
+        }
+        if (S.analysis) {
+            const a = S.analysis;
+            if (a.rootPc != null) rootPc = a.rootPc;
+            if (a.keyScale) scale = a.keyScale;
+            if (a.key && typeof a.key === "object") {
+                if (a.key.rootPc != null) rootPc = a.key.rootPc;
+                if (a.key.scale) scale = String(a.key.scale).toLowerCase().indexOf("min") >= 0 ? "minor" : "major";
+            }
+            if (typeof a.key === "string") {
+                const low = a.key.toLowerCase();
+                scale = low.indexOf("min") >= 0 ? "minor" : "major";
+            }
+        }
+        if (S.beatKey && S.beatKey.rootPc != null) {
+            rootPc = S.beatKey.rootPc;
+            if (S.beatKey.scale) scale = S.beatKey.scale;
+        }
+        return { rootPc, scale, refCents };
+    }
+
+    async function harmonizeBuffer(buf, degrees, onStatus) {
+        const Tune = window.VocalVaultTune;
+        if (!Tune || typeof Tune.harmonizeVocal !== "function") {
+            throw new Error("Pitch engine not loaded");
+        }
+        if (!degrees) return buf;
+        const sr = buf.sampleRate;
+        const channels = channelsFromBuffer(buf);
+        const keyOpts = keyOptionsForHarmony();
+        const result = await Tune.harmonizeVocal(
+            channels,
+            sr,
+            Object.assign({}, keyOpts, { degrees: degrees, retuneMs: 25 }),
+            (f) => { if (onStatus) onStatus(f); }
+        );
+        const outCh = result && result.audio && result.audio.harmony;
+        if (!outCh || !outCh[0]) throw new Error("Harmony build returned empty");
+        return bufferFromChannels(outCh, sr);
+    }
+
+    /** Composite every non-muted lane onto one mono vocal, with per-lane mix levels. */
+    async function renderCompositeVocal() {
+        // Include muted-by-mix mute skip; harmony lanes can be empty if they will generate from main
+        const active = lanes.filter((l) => {
+            if ((l.mixLevel || defaultMixLevel(l.type)) === "mute") return false;
+            if (l.clips.length) return true;
+            if (l.type === "harmony" && (l.harmonyDegrees || 0) > 0) return true;
+            return false;
+        });
+        if (!active.length) return null;
+
+        const mainLane = findMainLane();
+        const sr = beat.buffer?.sampleRate
+            || (active.find((l) => l.clips[0]?.buffer)?.clips[0].buffer.sampleRate)
+            || mainLane?.clips[0]?.buffer?.sampleRate
+            || 44100;
+
+        let dur = beat.duration || 0;
+        active.forEach((l) => l.clips.forEach((c) => { dur = Math.max(dur, c.start + c.duration); }));
+        if (mainLane) mainLane.clips.forEach((c) => { dur = Math.max(dur, c.start + c.duration); });
+        const length = Math.max(1, Math.ceil(dur * sr));
+        const offline = new OfflineAudioContext(1, length, sr);
+
+        const report = [];
+        const mainDb = mainReferenceDb();
+        const harmNames = { 2: "3rd", 4: "5th", 7: "octave" };
+
+        for (const lane of active) {
+            const resolved = resolveLaneGain(lane, mainDb);
+            if (resolved.key === "mute" || resolved.lin <= 0) continue;
+            const gLin = resolved.lin;
+            const degrees = (lane.type === "harmony") ? (lane.harmonyDegrees || 0) : 0;
+
+            // Source clips: own takes, or Main when generating a harmony on an empty lane
+            let sourceClips = lane.clips.filter((c) => c.buffer);
+            let fromMain = false;
+            if (!sourceClips.length && degrees > 0 && mainLane) {
+                sourceClips = mainLane.clips.filter((c) => c.buffer);
+                fromMain = true;
+            }
+            if (!sourceClips.length) continue;
+
+            let line = lane.name + ": " + resolved.label;
+            if (degrees > 0) {
+                line += " · " + (harmNames[degrees] || degrees) + " harmony"
+                    + (fromMain ? " from Main" : " from take");
+                status("Building harmony for " + lane.name + "…");
+            }
+            report.push(line);
+
+            for (const clip of sourceClips) {
+                let buf = clip.buffer;
+                if (degrees > 0) {
+                    try {
+                        buf = await harmonizeBuffer(buf, degrees, (f) => {
+                            status("Building harmony for " + lane.name + "… " + Math.round(f * 100) + "%");
+                        });
+                    } catch (err) {
+                        console.warn("Harmony build failed", err);
+                        report.push(lane.name + ": harmony skipped (" + (err.message || "error") + ")");
+                        if (fromMain) continue; // don't dump dry main as "harmony"
+                        // fall back to original take
+                    }
+                }
+                const src = offline.createBufferSource();
+                src.buffer = buf;
+                const gain = offline.createGain();
+                gain.gain.value = gLin;
+                src.connect(gain);
+                gain.connect(offline.destination);
+                src.start(Math.max(0, clip.start));
+            }
+        }
+
+        const rendered = await offline.startRendering();
+        const wav = audioBufferToWav(rendered);
+        const name = active.length === 1
+            ? active[0].name.replace(/\s+/g, "_") + "_comp.wav"
+            : "VocalVault_composite_" + active.length + "lanes.wav";
+        return {
+            file: new File([wav], name, { type: "audio/wav" }),
+            report,
+            laneCount: active.length
+        };
     }
 
     function audioBufferToWav(buffer) {
@@ -854,18 +1249,21 @@
             status("Load a beat first");
             return;
         }
-        const mainLane =
-            lanes.find((l) => l.type === "main" && l.clips.length) ||
-            lanes.find((l) => l.clips.length);
-        if (!mainLane) {
-            status("Record at least one vocal take");
+        const any = lanes.some((l) => {
+            if ((l.mixLevel || defaultMixLevel(l.type)) === "mute") return false;
+            if (l.clips.length) return true;
+            if (l.type === "harmony" && (l.harmonyDegrees || 0) > 0 && findMainLane()) return true;
+            return false;
+        });
+        if (!any) {
+            status("Record at least one vocal take (or add a Harmony lane with interval on)");
             return;
         }
 
-        status("Rendering vocal for pipeline…");
+        status("Rendering composite vocal…");
         try {
-            const vocalFile = await renderLaneToFile(mainLane);
-            if (!vocalFile) {
+            const composite = await renderCompositeVocal();
+            if (!composite || !composite.file) {
                 status("Nothing to send");
                 return;
             }
@@ -876,11 +1274,14 @@
                 beatFile = new File([wav], (beat.name || "beat") + ".wav", { type: "audio/wav" });
             }
 
-            assignFile(els.vocalInput, vocalFile, els.vocalFileName);
+            assignFile(els.vocalInput, composite.file, els.vocalFileName);
             assignFile(els.beatFileInput, beatFile, els.beatFileName);
             refreshRoles();
             setMode("pipeline");
-            status("Sent to Pipeline — continue to Alignment");
+            const summary = composite.report.length
+                ? composite.report.join(" · ")
+                : "1 lane";
+            status("Sent " + composite.laneCount + " lane(s) to Pipeline — " + summary);
             $("upload-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
         } catch (e) {
             console.warn(e);
@@ -928,6 +1329,12 @@
             els.beatInput.value = "";
         });
         els.addLane?.addEventListener("click", () => addLane(els.laneType?.value));
+        els.importAudio?.addEventListener("click", () => els.importInput?.click());
+        els.importInput?.addEventListener("change", () => {
+            const list = els.importInput.files;
+            if (list && list.length) importAudioFiles(list);
+            els.importInput.value = "";
+        });
         els.toPipeline?.addEventListener("click", sendToPipeline);
 
         els.trPlay?.addEventListener("click", play);
@@ -963,6 +1370,7 @@
             setMode,
             addLane,
             loadBeatFile,
+            importAudioFiles,
             lanes,
             beat,
             sendToPipeline,

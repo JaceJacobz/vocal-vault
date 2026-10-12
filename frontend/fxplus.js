@@ -95,25 +95,30 @@ function createFxPlusEngine(studio) {
     // is exactly as deep as the EQ curve says, and kick/bass/air are left alone.
     function duckBeatMid(beatChannels, vocalMono, sr, options) {
 
-        const o = Object.assign({ depthDb: 2.5, centerHz: 2000, q: 0.6 }, options || {});
+        // Only carve a narrow presence band so the vocal fits — kick, sub and
+        // bassline stay out of the duck. Wide Q + deep cut made choruses feel
+        // thin in the low end.
+        const o = Object.assign({ depthDb: 1.8, centerHz: 2500, q: 1.4 }, options || {});
         const { act, hop } = voiceActivity(vocalMono, sr);
 
         let active = 0; for (const a of act) if (a > 0.5) active++;
 
-        // the cut's centre is a little deeper than the nominal depth so the 1.5-3 kHz average lands on it
-        const cut = studio.design.peaking(o.centerHz, -o.depthDb * 1.15, o.q, sr);
+        const depth = Math.min(3.2, Math.max(0, o.depthDb));
+        const cut = studio.design.peaking(o.centerHz, -depth, o.q, sr);
 
         const channels = beatChannels.map((x) => {
             const cutX = studio.runCascade(x, [cut]);
             const out = new Float32Array(x.length);
             for (let i = 0; i < x.length; i++) {
                 const a = i < vocalMono.length ? act[Math.min(act.length - 1, Math.floor(i / hop))] : 0;
-                out[i] = x[i] + a * (cutX[i] - x[i]);
+                // Soften the duck amount (never full depth) so bass still reads in choruses
+                const amt = a * 0.75;
+                out[i] = x[i] + amt * (cutX[i] - x[i]);
             }
             return out;
         });
 
-        return { channels, depthDb: o.depthDb, activeFraction: active / act.length };
+        return { channels, depthDb: depth, activeFraction: active / act.length };
     }
 
     // ---------------------------------------------------------

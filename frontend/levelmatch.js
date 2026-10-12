@@ -29,13 +29,16 @@ function createLevelEngine() {
 
     const DEFAULTS = {
         mode: "dynamic",          // "dynamic" | "fixed" | "off"
-        vocalAboveBeatDb: 1.5,    // how far the vocal sits above the beat (LU)
-        rangeDb: 6,               // dynamic: furthest the fader moves either way
-        strength: 1,              // dynamic: 0 = fixed, 1 = full ride
+        vocalAboveBeatDb: 0,      // match the beat (not louder) — UI/recipes may still nudge
+        rangeDb: 5,               // dynamic: furthest the fader moves either way
+        strength: 0.85,           // dynamic: 0 = fixed, 1 = full ride
         beatWindowSec: 3,         // dynamic: how slowly it follows the beat's sections
         vocalWindowSec: 1,        // dynamic: how fast it follows the singer's phrases
         smoothSec: 0.4,           // dynamic: fader smoothing
-        peakTargetDb: -3          // mix peak after the master trim
+        peakTargetDb: -3,         // mix peak after the master trim
+        maxGainDb: 6,             // hard cap — quiet takes used to get +8 and clip
+        minGainDb: -18,
+        vocalPeakCeilingDb: -1.2  // after fader, vocal stem must not exceed this (anti-clip)
     };
 
     const toDb = (power) => (power > 1e-12 ? -0.691 + 10 * Math.log10(power) : -120);
@@ -228,13 +231,64 @@ function createLevelEngine() {
         }
 
         // ---- FIXED balance: one gain for the song
+        // Prefer hops where BOTH the beat and the vocal are present, so a quiet
+        // intro or sparse drums cannot make the engine think the beat is weak
+        // and push the vocal way up.
         const activePow = [];
         for (let j = 0; j < N; j++) if (active[j]) activePow.push(vocalP[j]);
         result.vocalLufs = toDb(activePow.reduce((a, b) => a + b, 0) / activePow.length);
 
-        const fixed = clamp(result.beatLufs + o.vocalAboveBeatDb - result.vocalLufs, -30, 30);
+        const beatGate = Math.max(-55, result.beatLufs - 18);
+        const pairDiffs = [];
+        for (let j = 0; j < N; j++) {
+            if (!active[j]) continue;
+            if (beatDb[j] < beatGate) continue;
+            pairDiffs.push(vocalDb[j] - beatDb[j]);
+        }
+        let fixed;
+        if (pairDiffs.length >= 8) {
+            pairDiffs.sort((a, b) => a - b);
+            const medianExcess = pairDiffs[pairDiffs.length >> 1];
+            // Want vocal ≈ beat + vocalAboveBeatDb → gain reduces excess
+            fixed = o.vocalAboveBeatDb - medianExcess;
+        } else {
+            fixed = result.beatLufs + o.vocalAboveBeatDb - result.vocalLufs;
+        }
+        fixed = clamp(fixed, o.minGainDb != null ? o.minGainDb : -18, o.maxGainDb != null ? o.maxGainDb : 6);
+
+        // Peak-safe: quiet vocals often need a big LUFS boost, but their
+        // sample peaks can already be hot. Cap gain so the loudest sample
+        // would land at vocalPeakCeilingDb instead of clipping to ±1.
+        let peakAbs = 0;
+        for (const ch of vocalChannels) {
+            for (let i = 0; i < ch.length; i++) {
+                const a = ch[i] < 0 ? -ch[i] : ch[i];
+                if (a > peakAbs) peakAbs = a;
+            }
+        }
+        const peakDbIn = peakAbs > 1e-9 ? 20 * Math.log10(peakAbs) : -120;
+        const ceiling = o.vocalPeakCeilingDb != null ? o.vocalPeakCeilingDb : -1.2;
+        const maxByPeak = ceiling - peakDbIn; // gain that puts peak at ceiling
+        let peakLimited = false;
+        if (o.mode !== "off" && fixed > maxByPeak) {
+            fixed = maxByPeak;
+            peakLimited = true;
+        }
+        // Also never boost into absolute clip even if ceiling is high
+        if (o.mode !== "off" && fixed > -peakDbIn - 0.1) {
+            fixed = -peakDbIn - 0.1;
+            peakLimited = true;
+        }
+
         result.fixedGainDb = o.mode === "off" ? 0 : fixed;
         result.vocalGainDb.fill(result.fixedGainDb);
+        result.balanceMethod = pairDiffs.length >= 8 ? "paired" : "integrated";
+        result.peakDbIn = peakDbIn;
+        result.peakLimited = peakLimited;
+        if (peakLimited) {
+            result.warning = (result.warning ? result.warning + " " : "") +
+                "Vocal was quiet overall but peaks were already high, so boost was limited to avoid digital clipping.";
+        }
 
         if (o.mode !== "dynamic" || o.strength <= 0) return result;
 
@@ -282,9 +336,11 @@ function createLevelEngine() {
 
         const smooth = smoothTwoWay(ride, o.smoothSec);
 
+        const maxG = o.maxGainDb != null ? o.maxGainDb : 6;
+        const minG = o.minGainDb != null ? o.minGainDb : -18;
         for (let j = 0; j < N; j++) {
             const move = clamp(smooth[j] * o.strength, -o.rangeDb, o.rangeDb);
-            result.vocalGainDb[j] = result.fixedGainDb + move;
+            result.vocalGainDb[j] = clamp(result.fixedGainDb + move, minG, maxG);
         }
 
         // ---- Explain it: where does the fader move, and why?
@@ -343,6 +399,11 @@ function createLevelEngine() {
         const vl = vocalChannels[0], vr = vocalChannels[1] || vocalChannels[0];
         const lin = Float64Array.from(thePlan.vocalGainDb, (d) => Math.pow(10, d / 20));
         const hop = HOP_SEC * sr, centre = BLOCK_CENTER * sr;
+        // Soft ceiling: if a dynamic ride still nudges a peak over, ease it
+        // instead of hard digital clip (tanh-ish near the top).
+        const ceilDb = (thePlan.options && thePlan.options.vocalPeakCeilingDb != null)
+            ? thePlan.options.vocalPeakCeilingDb : -1.2;
+        const ceil = Math.pow(10, ceilDb / 20);
 
         for (let i = 0; i < vl.length; i++) {
 
@@ -353,8 +414,21 @@ function createLevelEngine() {
             const i0 = Math.floor(u), i1 = Math.min(lin.length - 1, i0 + 1), f = u - i0;
             const g = lin[i0] * (1 - f) + lin[i1] * f;
 
-            L[k] = vl[i] * g;
-            R[k] = vr[i] * g;
+            let l = vl[i] * g;
+            let r = vr[i] * g;
+            // Soft limit only when past ceiling (keeps quiet samples pure)
+            if (l > ceil || l < -ceil) {
+                const s = l < 0 ? -1 : 1;
+                const x = Math.abs(l) / ceil;
+                l = s * ceil * (x < 1 ? x : 1 + Math.tanh(x - 1) * 0.35);
+            }
+            if (r > ceil || r < -ceil) {
+                const s = r < 0 ? -1 : 1;
+                const x = Math.abs(r) / ceil;
+                r = s * ceil * (x < 1 ? x : 1 + Math.tanh(x - 1) * 0.35);
+            }
+            L[k] = l;
+            R[k] = r;
         }
         return [L, R];
     }

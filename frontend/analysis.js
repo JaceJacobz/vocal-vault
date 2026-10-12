@@ -26,8 +26,8 @@ function detectBpm(samples, sampleRate, options) {
 
     const frameCount = Math.floor((samples.length - FRAME) / HOP) + 1;
 
-    if (frameCount < fps * 8) {
-        return { bpm: null, confidence: 0, reason: "Audio is too short to analyze (needs at least 8 seconds)." };
+    if (frameCount < fps * 6) {
+        return { bpm: null, confidence: 0, reason: "Audio is too short to analyze (needs at least 6 seconds)." };
     }
 
     // Normalise so quiet and loud files behave the same.
@@ -134,6 +134,51 @@ function detectBpm(samples, sampleRate, options) {
 
     // Keep the plain envelope: used later to check which tempo the
     // hits really line up with.
+    // Also build a low-band energy onset (kick / sub pulses). Sparse and
+    // lo-fi beats often have weak spectral flux but clear low thumps.
+    const lowEnv = new Float64Array(frameCount);
+    {
+        const loK = Math.max(1, Math.floor((20 * N) / sampleRate));
+        const hiK = Math.min(N / 2 - 1, Math.floor((180 * N) / sampleRate));
+        const prevL = new Float64Array(hiK - loK + 1);
+        for (let f = 0; f < frameCount; f++) {
+            const start = f * HOP;
+            for (let i = 0; i < N; i++) {
+                re[i] = samples[start + i] * gain * hann[i];
+                im[i] = 0;
+            }
+            fft(re, im);
+            let e = 0;
+            for (let k = loK; k <= hiK; k++) {
+                const mag = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+                const v = Math.log1p(mag);
+                const d = v - prevL[k - loK];
+                if (d > 0) e += d;
+                prevL[k - loK] = v;
+            }
+            lowEnv[f] = e;
+        }
+        // High-pass the slow average like the main onset
+        const prefL = new Float64Array(frameCount + 1);
+        for (let i = 0; i < frameCount; i++) prefL[i + 1] = prefL[i] + lowEnv[i];
+        const radL = Math.round(fps * 0.3);
+        for (let i = 0; i < frameCount; i++) {
+            const a = Math.max(0, i - radL);
+            const b = Math.min(frameCount, i + radL + 1);
+            const mean = (prefL[b] - prefL[a]) / (b - a);
+            lowEnv[i] = Math.max(0, lowEnv[i] - mean);
+        }
+        // Blend: spectral flux + low-band (kick bias helps sparse beats)
+        let maxF = 1e-12, maxL = 1e-12;
+        for (let i = 0; i < frameCount; i++) {
+            if (onset[i] > maxF) maxF = onset[i];
+            if (lowEnv[i] > maxL) maxL = lowEnv[i];
+        }
+        for (let i = 0; i < frameCount; i++) {
+            onset[i] = 0.55 * (onset[i] / maxF) + 0.45 * (lowEnv[i] / maxL);
+        }
+    }
+
     const onsetRaw = Float64Array.from(onset);
 
     // Centre and window the envelope to reduce spectral leakage.
@@ -378,9 +423,89 @@ function detectBpm(samples, sampleRate, options) {
         ? Math.max(0, Math.min(1, gridConfidence))
         : Math.max(0, Math.min(1, 0.6 * separation + 0.4 * prominence));
 
+    // ---------- Autocorrelation fallback for sparse / weak grids ----------
+    // When the tempogram+grid path is low confidence (lo-fi, sparse kicks,
+    // long pads), a lag-domain peak on the onset envelope often still finds
+    // a usable pulse. Only override when it clearly beats the current guess.
+    if (confidence < 0.45 || gridConfidence === null || gridConfidence < 0.35) {
+        const maxLag = Math.min(frameCount - 1, Math.round(fps * 60 / 55));   // ~55 BPM
+        const minLag = Math.max(2, Math.round(fps * 60 / 200));               // ~200 BPM
+        let bestLag = 0, bestAc = 0, acSum = 0, acN = 0;
+        // Normalize onsetRaw for stable correlation
+        let oMean = 0, oVar = 0;
+        for (let i = 0; i < frameCount; i++) oMean += onsetRaw[i];
+        oMean /= frameCount;
+        for (let i = 0; i < frameCount; i++) {
+            const d = onsetRaw[i] - oMean;
+            oVar += d * d;
+        }
+        oVar = Math.sqrt(oVar / frameCount) || 1;
+        for (let lag = minLag; lag <= maxLag; lag++) {
+            let s = 0, n = 0;
+            for (let i = 0; i + lag < frameCount; i++) {
+                s += ((onsetRaw[i] - oMean) / oVar) * ((onsetRaw[i + lag] - oMean) / oVar);
+                n++;
+            }
+            if (n < fps * 4) continue;
+            const ac = s / n;
+            acSum += Math.max(0, ac);
+            acN++;
+            if (ac > bestAc) {
+                bestAc = ac;
+                bestLag = lag;
+            }
+        }
+        if (bestLag > 0 && bestAc > 0.08) {
+            let acBpm = (60 * fps) / bestLag;
+            // Fold into 70–160 when possible (prefer music tempo range)
+            while (acBpm < 70 && acBpm * 2 <= 200) acBpm *= 2;
+            while (acBpm > 160 && acBpm / 2 >= 70) acBpm /= 2;
+            // Re-score with gridLift so we don't invent tempos
+            const acLift = gridLift(acBpm);
+            const acConf = Math.max(0, Math.min(1, (bestAc - 0.05) / 0.35));
+            if (acLift > 0 && (confidence < 0.35 || acLift >= (checked[0] ? checked[0].lift * 0.92 : 0))) {
+                // Prefer the lag tempo when confidence was weak
+                if (confidence < 0.4 || acConf > confidence) {
+                    bestBpm = acBpm;
+                    confidence = Math.max(confidence, Math.min(0.72, 0.4 * acConf + 0.4 * Math.min(1, acLift / 4)));
+                }
+            }
+        }
+    }
+
+    // Snap toward whole-number BPMs when we are within ~0.4% — producers
+    // almost always export integer tempos, and it stabilizes downstream tools.
+    {
+        const rounded = Math.round(bestBpm);
+        if (rounded >= 55 && rounded <= 210 && Math.abs(bestBpm - rounded) / bestBpm < 0.004) {
+            bestBpm = rounded;
+        }
+    }
+
+    // Alternatives: half / double / nearest strong peak (for the UI chips)
+    const alternatives = [];
+    function pushAlt(bpm, why) {
+        if (!(bpm > 40 && bpm < 240)) return;
+        const r = Math.round(bpm * 10) / 10;
+        for (const a of alternatives) {
+            if (Math.abs(a.bpm - r) < 0.3) return;
+        }
+        alternatives.push({ bpm: r, why: why || "" });
+    }
+    pushAlt(bestBpm / 2, "half");
+    pushAlt(bestBpm * 2, "double");
+    if (checked && checked.length) {
+        for (let i = 1; i < Math.min(4, checked.length); i++) {
+            if (Math.abs(checked[i].bpm - bestBpm) / bestBpm > 0.06) {
+                pushAlt(checked[i].bpm, "alt");
+            }
+        }
+    }
+
     const output = {
         bpm: Math.round(bestBpm * 10) / 10,
-        confidence: Math.round(confidence * 100) / 100
+        confidence: Math.round(confidence * 100) / 100,
+        alternatives: alternatives
     };
 
     if (options.debug) {
