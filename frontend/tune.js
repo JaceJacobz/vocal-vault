@@ -140,6 +140,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
         const selectiveBox = $("tune-selective");
         const spokenBox = $("tune-spoken");
+        const naturalBox = $("tune-natural");
         const options = {
             rootPc: parseInt(rootSelect.value, 10),
             scale: scaleSelect.value,
@@ -153,7 +154,9 @@ document.addEventListener("DOMContentLoaded", () => {
             selective: selectiveBox ? selectiveBox.checked : true,
             selectiveCents: 24,
             selectiveSoftCents: 52,
-            spokenSung: spokenBox ? spokenBox.checked : false
+            spokenSung: spokenBox ? spokenBox.checked : false,
+            natural: naturalBox ? naturalBox.checked : true,      // gentle vibrato, quicker arrival on notes, steadier holds
+            adaptive: naturalBox ? naturalBox.checked : true      // rawer takes get a stronger, steadier correction
         };
         if (S) S.tuneOptions = { rootPc: options.rootPc, scale: options.scale, refCents: options.refCents };   // the harmony layer follows this key
 
@@ -291,6 +294,19 @@ document.addEventListener("DOMContentLoaded", () => {
             text = result.corrected === 0
                 ? "No note was more than 15 cents off the scale, so only fine tightening was applied. "
                 : `${result.corrected} of ${result.notes} notes were more than 15 cents off and were pulled onto the scale. `;
+        }
+
+        // Singing feel: what was done to make a raw take sound sung
+        if (result.adaptive && result.adaptive.rawness >= 0.5) {
+            text += ` This was a raw take (only ${Math.round(result.adaptive.within25Pct)}% of the singing sat within 25 cents of a note), so notes were steadied and pulled in more firmly.`;
+        }
+        if (result.natural) {
+            const nf = result.natural, bits = [];
+            if (nf.vibratoAdded) bits.push(`a gentle vibrato on ${nf.vibratoAdded} held note${nf.vibratoAdded === 1 ? "" : "s"}`);
+            if (nf.onsetsTightened) bits.push(`cleaner starts on ${nf.onsetsTightened} note${nf.onsetsTightened === 1 ? "" : "s"}`);
+            if (nf.endsHeld) bits.push(`steadier ends on ${nf.endsHeld} note${nf.endsHeld === 1 ? "" : "s"}`);
+            if (bits.length) text += ` Natural feel: ${bits.join(", ")}.`;
+            if (nf.vibratoKept) text += ` Left your own vibrato on ${nf.vibratoKept} note${nf.vibratoKept === 1 ? "" : "s"}.`;
         }
 
         if (result.detuneEvents) {

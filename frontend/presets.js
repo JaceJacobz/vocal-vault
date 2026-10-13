@@ -25,14 +25,14 @@
             preferDoubler: null,
             forceMinimalFx: false,
             beatEnhanceStrength: 1,
-            suggestedLufs: -12
+            suggestedLufs: -14
         },
         afrobeats: {
             id: "afrobeats",
             label: "Afrobeats / Amapiano",
             blurb: "Bright top, tight low-mids, shorter space, forward vocal",
-            presenceDb: 2.1,
-            airDb: 2.9,
+            presenceDb: 1.9,
+            airDb: 2.4,
             cutStrength: 0.72,
             boostStrength: 0.55,
             sat: { drive: 1.55, mix: 0.11 },
@@ -46,14 +46,14 @@
             preferDoubler: true,
             forceMinimalFx: false,
             beatEnhanceStrength: 1.15,
-            suggestedLufs: -12
+            suggestedLufs: -14
         },
         trap: {
             id: "trap",
             label: "Trap / Drill",
             blurb: "Harder compression, more grit, louder vocal, darker space",
-            presenceDb: 1.9,
-            airDb: 1.2,
+            presenceDb: 1.7,
+            airDb: 1.1,
             cutStrength: 0.75,
             boostStrength: 0.5,
             sat: { drive: 1.6, mix: 0.12 },
@@ -67,14 +67,14 @@
             preferDoubler: false,
             forceMinimalFx: false,
             beatEnhanceStrength: 1.25,
-            suggestedLufs: -9
+            suggestedLufs: -12
         },
         rap: {
             id: "rap",
             label: "Rap / Hip-Hop",
             blurb: "Dry, punchy, lyric-forward — clear midrange, tight space, sits on top of the beat",
-            presenceDb: 2.35,
-            airDb: 1.65,
+            presenceDb: 2.0,
+            airDb: 1.4,
             cutStrength: 0.78,
             boostStrength: 0.52,
             sat: { drive: 1.5, mix: 0.1 },
@@ -88,14 +88,14 @@
             preferDoubler: false,
             forceMinimalFx: false,
             beatEnhanceStrength: 1.2,
-            suggestedLufs: -10
+            suggestedLufs: -13
         },
         rnb: {
             id: "rnb",
             label: "R&B / Melodic",
             blurb: "Softer dynamics, longer plate, gentle width",
-            presenceDb: 1.7,
-            airDb: 2.35,
+            presenceDb: 1.55,
+            airDb: 2.1,
             cutStrength: 0.55,
             boostStrength: 0.45,
             sat: { drive: 1.35, mix: 0.09 },
@@ -109,7 +109,7 @@
             preferDoubler: true,
             forceMinimalFx: false,
             beatEnhanceStrength: 0.9,
-            suggestedLufs: -12
+            suggestedLufs: -14
         },
         clean: {
             id: "clean",
@@ -130,7 +130,7 @@
             preferDoubler: false,
             forceMinimalFx: true,
             beatEnhanceStrength: 0.65,
-            suggestedLufs: -14
+            suggestedLufs: -16
         }
     };
 

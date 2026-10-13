@@ -683,6 +683,95 @@ function createTuneEngine() {
         return out;
     }
 
+    // ---------------------------------------------------------
+    // Singing feel.
+    //
+    // Pulling every note to its target is only half of making a raw take sound like good singing. Trained
+    // singers also (1) arrive on the note instead of scooping up from far below it, (2) hold a note to its
+    // end without sagging, and (3) add a gentle vibrato to held notes. Raw takes usually do none of these,
+    // and a correction that only moves note centres leaves them sounding "fixed" rather than "sung".
+    // Everything here is small, shaped, and only on notes that are really being sung (not talk-sing).
+    // ---------------------------------------------------------
+
+    function sstep(x) { x = Math.max(0, Math.min(1, x)); return x * x * (3 - 2 * x); }
+
+    // Does this held note already have vibrato? Looks for a 3.5-8 Hz wobble of at least ~10 cents.
+    function vibratoOf(midi, a, b, hopSec) {
+        const m = [];
+        for (let k = a; k < b; k++) m.push(midi[k]);
+        const valid = m.filter(v => !isNaN(v)).length;
+        if (valid < 0.9 * m.length || m.length < 8) return { has: false, peak: 0, stable: false };
+        const W = Math.max(3, Math.round(0.25 / hopSec) | 1);
+        const dev = new Float32Array(m.length);
+        for (let i = 0; i < m.length; i++) {
+            let s = 0, c = 0;
+            for (let j = Math.max(0, i - (W >> 1)); j <= Math.min(m.length - 1, i + (W >> 1)); j++) if (!isNaN(m[j])) { s += m[j]; c++; }
+            dev[i] = isNaN(m[i]) || !c ? 0 : (m[i] - s / c) * 100;
+        }
+        let ss = 0; for (let i = 0; i < dev.length; i++) ss += dev[i] * dev[i];
+        const std = Math.sqrt(ss / dev.length), peak = std * Math.SQRT2;
+        let crossings = 0, sign = 0;
+        for (let i = 0; i < dev.length; i++) { const sg = dev[i] > 2.5 ? 1 : (dev[i] < -2.5 ? -1 : 0); if (sg && sg !== sign) { if (sign) crossings++; sign = sg; } }
+        const rate = crossings / (2 * dev.length * hopSec);
+        return { has: peak >= 10 && rate >= 3.5 && rate <= 8, peak, rate, stable: std < 25 };
+    }
+
+    function naturalize(track, notes, info, raw, o, hopSec) {
+
+        const midi = track.midi;
+        const att = o.attackTighten != null ? o.attackTighten : 0.45;
+        const endHold = o.endHold != null ? o.endHold : 0.3;
+        const vibAmt = o.vibratoAmount != null ? o.vibratoAmount : 0.6;
+        const out = { vibratoAdded: 0, onsetsTightened: 0, endsHeld: 0, vibratoKept: 0 };
+        const linkFrames = Math.ceil(0.06 / hopSec);
+
+        for (let i = 0; i < notes.length; i++) {
+
+            const nt = notes[i], inf = info[i];
+            if (inf.talk) continue;
+            const dur = (nt.end - nt.start) * hopSec;
+            const pulled = inf.pull > 0.02;
+
+            // 1 + 2. Arrive on the note, and do not sag at its end (a note that glides straight into the next one is left alone)
+            if (pulled && dur >= 0.12 && (att > 0 || endHold > 0)) {
+                const linkedNext = i + 1 < notes.length && notes[i + 1].start - nt.end <= linkFrames;
+                let touchedStart = false, touchedEnd = false;
+                for (let k = nt.start; k < nt.end; k++) {
+                    if (isNaN(midi[k])) continue;
+                    const t = (k - nt.start) * hopSec, tEnd = (nt.end - 1 - k) * hopSec;
+                    const wStart = att > 0 ? att * sstep((t - 0.015) / 0.03) * (1 - sstep((t - 0.10) / 0.10)) : 0;
+                    const wEnd = (endHold > 0 && !linkedNext && dur >= 0.3) ? endHold * (1 - sstep((tEnd - 0.04) / 0.10)) : 0;
+                    const w = Math.max(wStart, wEnd) * inf.pull;
+                    if (w <= 0.001) continue;
+                    const final = midi[k] + raw[k] / 100;
+                    raw[k] += Math.max(-100, Math.min(100, (inf.target - final) * 100 * w));
+                    if (wStart >= wEnd) touchedStart = true; else touchedEnd = true;
+                }
+                if (touchedStart) out.onsetsTightened++;
+                if (touchedEnd) out.endsHeld++;
+            }
+
+            // 3. A gentle vibrato on held notes that have none
+            if (vibAmt > 0 && dur >= 0.55 && inf.long) {
+                const v = vibratoOf(midi, nt.start + Math.round(0.15 / hopSec), nt.end - Math.round(0.10 / hopSec), hopSec);
+                if (v.has) { out.vibratoKept++; continue; }
+                if (!v.stable) continue;
+                const depth = vibAmt * 22 * Math.max(0.5, Math.min(1, (dur - 0.5) / 0.6));      // cents, peak
+                const delay = 0.28 + 0.05 * Math.sin(i * 2.3);
+                const rate = 5.2 + 0.5 * Math.sin(i * 1.7 + 0.5);
+                for (let k = nt.start; k < nt.end; k++) {
+                    if (isNaN(midi[k])) continue;
+                    const t = (k - nt.start) * hopSec - delay, tEnd = (nt.end - 1 - k) * hopSec;
+                    if (t <= 0) continue;
+                    const env = sstep(t / 0.35) * sstep(tEnd / 0.12);
+                    raw[k] += depth * env * Math.sin(2 * Math.PI * rate * t + 0.15 * Math.sin(2 * Math.PI * 0.3 * t));
+                }
+                out.vibratoAdded++;
+            }
+        }
+        return out;
+    }
+
     function planCorrection(track, notes, o) {
 
         const mask = scaleMask(o.rootPc, o.scale);
@@ -858,9 +947,13 @@ function createTuneEngine() {
                 offsetCents: offset,
                 errorCents: errCents,
                 pull: notePull,
-                long: isLong
+                long: isLong,
+                talk: talk
             });
         }
+
+        // Make it sound sung, not just corrected (can be switched off with natural: false)
+        const natural = o.natural !== false ? naturalize(track, notes, info, raw, o, hopSec) : null;
 
         // Retune smoothing: high strength + selective must glide more or the
         // correction sounds robotic. Non-musicians leave strength at 100%.
@@ -882,6 +975,7 @@ function createTuneEngine() {
             biasCents: smart ? smart.biasCents : 0,
             ambiguous: smart ? smart.ambiguous : 0,
             selective: { skipped, partial, corrected, thresh: selectThresh, soft: selectSoft, spokenLifted },
+            natural: natural,
             retuneMsUsed: retuneMs
         };
     }
@@ -1304,6 +1398,7 @@ function createTuneEngine() {
         result.stats.original = measure(track, o);
         result.contours.original = Float32Array.from(track.midi);
         result.keyFit = keyFit(track, o);
+        const origTrack = track;
 
         // Whole-vocal move: the user's own (manualSemitones) plus, if the vocal is clearly in another key,
         // the one move that fits it into the beat's key best. Decided on the real vocal, before any test detune.
@@ -1312,6 +1407,25 @@ function createTuneEngine() {
         // a deliberate manual move always wins: auto-matching would simply undo it
         if (o.autoTranspose !== false && !o.chromatic && o.manualSemitones === 0) autoMove = bestTransposition(segmentNotes(track.midi), o);
         o.transposeTotal = o.manualSemitones + autoMove.s;
+
+        // How raw is this take? Judged AFTER the whole-vocal move (a vocal sung in another key is not a bad singer).
+        // The rawer it is, the more notes get pulled, the more a held note is steadied, and the more vibrato it gets.
+        if (o.adaptive !== false) {
+            const sMoved = measure(origTrack, Object.assign({}, o, { refCents: (o.refCents || 0) - o.transposeTotal * 100 }));
+            if (sMoved.voicedFrames > 100) {
+                const c01 = (x) => Math.max(0, Math.min(1, x));
+                // mostly how far the singing sits from the notes (in key at the semitone level is almost always true)
+                const rawness = 0.4 * c01((78 - sMoved.within25Pct) / 42) + 0.4 * c01((sMoved.medianCents - 8) / 18) + 0.2 * c01((90 - sMoved.inKeyPct) / 40);
+                const lerp = (a, b, t) => a + (b - a) * t;
+                o.selectiveCents = lerp(o.selectiveCents, 12, rawness);
+                o.selectiveSoftCents = lerp(o.selectiveSoftCents, 34, rawness);
+                o.flatten = Math.max(o.flatten, 0.30 + 0.30 * rawness);
+                if (o.vibratoAmount == null) o.vibratoAmount = 0.5 + 0.25 * rawness;
+                if (o.attackTighten == null) o.attackTighten = 0.40 + 0.30 * rawness;     // reach the note sooner
+                if (o.endHold == null) o.endHold = 0.25 + 0.20 * rawness;                  // sag less at the end
+                result.adaptive = { rawness: rawness, within25Pct: sMoved.within25Pct, inKeyPct: sMoved.inKeyPct, selectiveCents: o.selectiveCents, flatten: o.flatten };
+            }
+        }
         result.transposeAuto = autoMove.s;
         result.transposeManual = o.manualSemitones;
         result.transposeFit = { before: autoMove.before, after: autoMove.after };
@@ -1358,6 +1472,7 @@ function createTuneEngine() {
         result.biasCents = plan.biasCents;
         result.ambiguousNotes = plan.ambiguous;
         result.selective = plan.selective || null;
+        result.natural = plan.natural || null;
 
         progress(1, "Done");
         return result;

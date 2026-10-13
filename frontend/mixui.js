@@ -15,10 +15,10 @@
 // ---------------------------------------------------------
 
 const LOUDNESS_TARGETS = [
-    { lufs: -12, label: "Balanced, −12 LUFS (default)" },
-    { lufs: -14, label: "Streaming standard, −14 LUFS (Spotify, YouTube, Tidal)" },
+    { lufs: -14, label: "Streaming / open, −14 LUFS (default — keeps vocal character)" },
+    { lufs: -12, label: "Balanced, −12 LUFS" },
     { lufs: -16, label: "Apple Music / Sound Check, −16 LUFS" },
-    { lufs: -9,  label: "Loud, −9 LUFS (club, hip-hop, hard limiting)" }
+    { lufs: -9,  label: "Loud, −9 LUFS (club — more limiting, can thin the vocal)" }
 ];
 
 // Gains (<= 1) that bring both versions to the loudness of the quieter one.

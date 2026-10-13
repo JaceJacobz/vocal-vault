@@ -28,7 +28,7 @@
         <div class="logo-mark" aria-hidden="true"><img src="logo.png" alt=""></div>
         <div class="brand-block">
             <h1>Vocal Vault</h1>
-            <p class="subtitle" id="mode-subtitle">Upload, align, correct, mix, master</p>
+            <p class="subtitle" id="mode-subtitle">Vocal production</p>
         </div>
 
         <div class="header-controls">
@@ -401,6 +401,13 @@
                 </span>
             </label>
             <label class="tune-check">
+                <input type="checkbox" id="tune-natural" checked>
+                <span>
+                    Natural singing feel
+                    <small>Raw takes: reach notes sooner, hold them steady, and add a gentle vibrato to held notes. Good takes are left as sung.</small>
+                </span>
+            </label>
+            <label class="tune-check">
                 <input type="checkbox" id="tune-auto-key" checked>
                 <span>
                     Match vocal key to the beat
@@ -414,13 +421,11 @@
                     <small>Talk-sing lines pulled onto notes. Off by default.</small>
                 </span>
             </label>
-            <label class="tune-check">
-                <input type="checkbox" id="tune-test">
-                <span>
-                    Test mode: detune the vocal first
-                    <small>60–100 cents on most notes, plus some wrong notes</small>
-                </span>
-            </label>
+            <div class="tune-row">
+                <label for="tune-shift">Move the whole vocal</label>
+                <strong id="tune-shift-value">0 (automatic)</strong>
+                <input type="range" id="tune-shift" class="tune-slider" min="-12" max="12" value="0" step="1">
+            </div>
             <div class="pro-only">
             <div class="tune-row">
                 <label for="tune-retune">Retune speed</label>
@@ -432,11 +437,6 @@
                 <strong id="tune-flatten-value">40%</strong>
                 <input type="range" id="tune-flatten" class="tune-slider" min="0" max="100" value="40" step="5">
             </div>
-            <div class="tune-row">
-                <label for="tune-shift">Move the whole vocal</label>
-                <strong id="tune-shift-value">0 (automatic)</strong>
-                <input type="range" id="tune-shift" class="tune-slider" min="-12" max="12" value="0" step="1">
-            </div>
             <p class="control-with-tip">
                 <span class="control-tip-label">Advanced pitch</span>
                 <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Strength: how far notes are pulled. Retune speed: lower locks faster, higher sounds smoother. Flatten: keep lower so long notes still feel human.</span></span>
@@ -444,6 +444,13 @@
             </div>
         </div>
 
+        <div class="loop-controls">
+            <label class="loop-toggle">
+                <input type="checkbox" id="tune-test">
+                Test mode: detune the vocal first
+            </label>
+            <span class="loop-note">60–100 cents on most notes, plus some wrong notes</span>
+        </div>
 
         <button id="tune-run-button" class="primary-button">Run Pitch Correction</button>
         <p id="tune-status" class="timeline-hint" aria-live="polite"></p>

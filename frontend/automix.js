@@ -19,7 +19,7 @@
  *     window.VocalVaultAutomix.process(window.VocalVaultState) -> AudioBuffer
  *
  * Optional settings on the state object:
- *     state.masterTargetLufs   loudness target, default -12
+ *     state.masterTargetLufs   loudness target, default -14
  */
 
 (function () {
@@ -645,15 +645,22 @@ function applyAdaptiveRecipe(recipe, assessment, balanceMode) {
     r.vocalAboveBeatDb = Math.min(r.vocalAboveBeatDb != null ? r.vocalAboveBeatDb : 0.8, 0.4);
     r._adaptiveNote = "Light path: this take was already loud/pushed — less hype so strain stays natural.";
   } else if (path === "smooth") {
-    r.eq.presenceDb = Math.max(r.eq.presenceDb != null ? r.eq.presenceDb : 1, 1.0);
-    r.eq.airDb = Math.min(Math.max(r.eq.airDb != null ? r.eq.airDb : 1.2, 1.0), 1.6);
+    // Raw/quiet home takes: evening yes, but do NOT brighten the top —
+    // air + master makeup is what makes them sound like a cheap mic.
+    const quiet = (assessment && assessment.rmsDb != null && assessment.rmsDb < -20);
+    r.eq.presenceDb = Math.min(r.eq.presenceDb != null ? r.eq.presenceDb : 1.2, quiet ? 1.0 : 1.35);
+    r.eq.airDb = Math.min(r.eq.airDb != null ? r.eq.airDb : 1.2, quiet ? 0.7 : 1.15);
+    r.eq.boostStrength = Math.min(r.eq.boostStrength != null ? r.eq.boostStrength : 0.4, quiet ? 0.32 : 0.4);
     r.presenceDb = r.eq.presenceDb;
     r.airDb = r.eq.airDb;
-    r.sat = { drive: Math.min(r.sat.drive, 1.4), mix: Math.min(r.sat.mix, 0.09) };
-    r.compressTightenDb = Math.max(r.compressTightenDb || 0, 1.8);
-    r._levelerExtraDb = 2.5;
-    r.vocalAboveBeatDb = r.vocalAboveBeatDb != null ? r.vocalAboveBeatDb : 0.8;
-    r._adaptiveNote = "Smooth path: take sounded raw/uneven — more evening, gentle polish (not more grit).";
+    r.sat = { drive: Math.min(r.sat.drive, 1.35), mix: Math.min(r.sat.mix, 0.07) };
+    r.compressTightenDb = Math.max(r.compressTightenDb || 0, 1.5);
+    r._levelerExtraDb = quiet ? 1.6 : 2.2;
+    r.vocalAboveBeatDb = Math.min(r.vocalAboveBeatDb != null ? r.vocalAboveBeatDb : 0.5, 0.35);
+    r._quietTake = !!quiet;
+    r._adaptiveNote = quiet
+      ? "Smooth path on a quiet take: evened the performance, kept the top gentle so noise stays down after mastering."
+      : "Smooth path: take sounded raw/uneven — more evening, gentle polish (not more grit).";
   } else {
     r._adaptiveNote = "Full path: balanced polish for this take.";
   }
@@ -716,14 +723,20 @@ async function processAutomix(state, options) {
   // 1. Vocal polish: high-pass, de-ess, auto-EQ
   let working = vocal;
   let params = first;
+  let strainStrength = 0;     // 0..1, set by the vocal polish: how much strain was found in the take
   if (polish) {
     setStatus("Cleaning up and balancing the vocal…");
     await nextFrame();
     const prepOpts = { highPassHz: first.hpfCutoff };
     if (recipe) prepOpts.eq = recipe.eq;
+    // Quiet / raw home takes: do not chase a bright studio EQ curve
+    if ((recipe && recipe._quietTake) || (assessment && assessment.rmsDb != null && assessment.rmsDb < -20)) {
+      prepOpts.quietTake = true;
+    }
     const prepared = Studio.prepareVocal(vocal, prepOpts);
     lines.push(...prepared.report);
     working = prepared.buffer;
+    strainStrength = (prepared.details && prepared.details.strain && prepared.details.strain.strength) || 0;
     // compressor settings follow the vocal as it is NOW (after the de-esser and EQ)
     params = Object.assign(calculateAutoMixParams(working, beat, metadata), { hpfCutoff: first.hpfCutoff });
   } else {
@@ -752,7 +765,12 @@ async function processAutomix(state, options) {
   let finished = await renderVocalChain(working, params, { highpass: !polish });
   lines.push("Evened out loud and quiet words with two-stage compression.");
   if (polish) {
-    const warmOpts = recipe ? { sat: recipe.sat } : undefined;
+    // strained takes get less saturation: it adds harmonics exactly where the voice is already harsh
+    let warmOpts = recipe ? { sat: recipe.sat } : undefined;
+    if (strainStrength > 0) {
+      const base = (warmOpts && warmOpts.sat) || { drive: 1.35, mix: 0.08 };
+      warmOpts = { sat: { drive: Math.max(1.1, base.drive * (1 - 0.15 * strainStrength)), mix: base.mix * (1 - 0.65 * strainStrength) } };
+    }
     const warm = Studio.finishVocal(finished, warmOpts);
     finished = warm.buffer;
     lines.push(...warm.report);
@@ -788,16 +806,19 @@ async function processAutomix(state, options) {
     if (balanceMode === "closer") above = Math.min(above, -0.3);
     else if (balanceMode === "forward") above = Math.min(1.2, Math.max(above, 0.6));
     else above = Math.min(above, 0.25); // balanced → essentially match
+    // Quiet takes: cap how hard we boost so noise floor stays controlled
+    const quietSrc = (params.vocalStats && params.vocalStats.rmsDb != null && params.vocalStats.rmsDb < -18);
     levelOptions = Object.assign({}, levelOptions || {}, {
       vocalAboveBeatDb: above,
       vocalPeakCeilingDb: -1.2,
-      maxGainDb: 6
+      maxGainDb: quietSrc ? 4.5 : 6
     });
   } else {
+    const quietSrc = (params.vocalStats && params.vocalStats.rmsDb != null && params.vocalStats.rmsDb < -18);
     levelOptions = Object.assign({}, levelOptions || {}, {
       vocalAboveBeatDb: balanceMode === "forward" ? 0.8 : (balanceMode === "closer" ? -0.3 : 0),
       vocalPeakCeilingDb: -1.2,
-      maxGainDb: 6
+      maxGainDb: quietSrc ? 4.5 : 6
     });
   }
   const vocalChannels = channelsOf(finished).map((c) => engine.resample(c, finished.sampleRate, sr));
@@ -820,20 +841,26 @@ async function processAutomix(state, options) {
     await nextFrame();
     let rootPc = 0;
     let scaleName = "major";
+    let keyKnown = false;
     if (state.beatKey && state.beatKey.key) {
       const names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
       const idx = names.indexOf(state.beatKey.key);
-      if (idx >= 0) rootPc = idx;
+      if (idx >= 0) { rootPc = idx; keyKnown = true; }
       if (state.beatKey.scale) scaleName = String(state.beatKey.scale).toLowerCase();
     } else if (state.tuneOptions && state.tuneOptions.rootPc != null) {
       rootPc = state.tuneOptions.rootPc;
       scaleName = state.tuneOptions.scale || "major";
+      keyKnown = true;
     }
     const bpm = state.beatBpm || state.bpm || 90;
+    // if the key is not known the fill estimates it from the beat's own audio instead of guessing C major
     const fill = window.VocalVaultFill.fillMissing(beatChannels, sr, {
       bpm: bpm,
       rootPc: rootPc,
       scale: scaleName,
+      keyKnown: keyKnown,
+      style: recipe ? recipe.styleId : "universal",
+      tuningCents: (state.tuneOptions && state.tuneOptions.refCents) || 0,
       strength: 0.75
     });
     beatChannels = fill.channels;
@@ -887,6 +914,14 @@ async function processAutomix(state, options) {
         space.echoBelowDb = Math.max(space.echoBelowDb, 26);
         space.reverbSecMax = Math.min(space.reverbSecMax, 0.7);
       }
+    }
+    if (strainStrength > 0) {
+      // keep the strained parts from being pushed forward: less dip in the beat, less width, less reverb
+      space = Object.assign({}, space);
+      space.midDuckDb = (space.midDuckDb || 0) * (1 - 0.6 * strainStrength);
+      space.doublerBelowDb = (space.doublerBelowDb || 13) + 3 * strainStrength;
+      space.reverbBelowDb = (space.reverbBelowDb || 16) + 2 * strainStrength;
+      lines.push("This take has strained moments, so the mid dip in the beat, the double and the reverb are held back to keep them from standing out.");
     }
     lines.push(space.reason);
 
@@ -996,19 +1031,38 @@ async function processAutomix(state, options) {
     lines.push("Skipped the shared room: the vocal needs to stay dry and forward.");
   }
 
-  // 6. Master
+  // 6. Master — light by default; quieter still on quiet/raw takes
   let masterInfo = null;
   if (opt.master) {
     setStatus("Mastering…");
     await nextFrame();
-    const target = typeof state.masterTargetLufs === "number" ? state.masterTargetLufs : -12;
-    const m = Studio.master(channels, sr, { targetLufs: target });
+    let target = typeof state.masterTargetLufs === "number" ? state.masterTargetLufs : -14;
+    let maxLim = 4.0;
+    // Quiet source already got a big level-match boost; another hard master
+    // push is what makes the noise floor and mic texture obvious.
+    const quietTake = !!(recipe && recipe._quietTake) ||
+      (assessment && assessment.rmsDb != null && assessment.rmsDb < -20) ||
+      (params.vocalStats && params.vocalStats.rmsDb != null && params.vocalStats.rmsDb < -18);
+    if (quietTake) {
+      target = Math.min(target, -14.5);
+      maxLim = 3.0;
+      lines.push("Quiet take detected: mastering held back so raising the voice does not raise the noise floor with it.");
+    }
+    const m = Studio.master(channels, sr, {
+      targetLufs: target,
+      maxLimiterDb: maxLim,
+      ceilingDb: -1
+    });
     channels = m.channels;
     masterInfo = m.report;
+    if (masterInfo.lowEnd && masterInfo.lowEnd.length) lines.push(...masterInfo.lowEnd);
     lines.push(`Mastered to ${masterInfo.outputLufs.toFixed(1)} LUFS (was ${masterInfo.inputLufs.toFixed(1)}), true peak ${masterInfo.truePeakDb.toFixed(1)} dBTP` +
       (masterInfo.limiterMaxDb >= 0.5 ? `, limiter working up to ${masterInfo.limiterMaxDb.toFixed(1)} dB.` : ", limiter barely needed."));
+    if (masterInfo.glueMaxDb >= 1.5) {
+      lines.push(`Light bus glue (~${masterInfo.glueMaxDb.toFixed(1)} dB) — kept gentle so the vocal stays open.`);
+    }
     if (masterInfo.outputLufs < target - 0.6) {
-      lines.push(`Stopped ${(target - masterInfo.outputLufs).toFixed(1)} LU short of the ${target} LUFS target: getting there would take more than 8 dB of limiting on this track, which would squash the drums. Choose a quieter target for a more open sound.`);
+      lines.push(`Stopped ${(target - masterInfo.outputLufs).toFixed(1)} LU short of the ${target} LUFS target on purpose: more limiting would squash the mix and make the vocal sound thin. Pick a quieter target (or leave this) for a more open sound.`);
     }
   } else {
     // safety: never hand back a mix that clips
