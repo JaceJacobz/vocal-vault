@@ -23,7 +23,7 @@
 
 <div id="app-shell" class="app-shell mode-pipeline is-booting ux-simple">
 
-    <!-- TOP BAR -->
+    <!-- TOP BAR: logo + name · Simple/Pro · Pipeline/Studio · roles -->
     <header class="top-bar">
         <div class="logo-mark" aria-hidden="true"><img src="logo.png" alt=""></div>
         <div class="brand-block">
@@ -31,15 +31,14 @@
             <p class="subtitle" id="mode-subtitle">Vocal production</p>
         </div>
 
-        <div class="header-controls">
-            <div class="mode-switch" role="tablist" aria-label="App mode">
-                <button type="button" class="mode-btn is-active" data-mode="pipeline" role="tab" aria-selected="true">Pipeline</button>
-                <button type="button" class="mode-btn" data-mode="studio" role="tab" aria-selected="false">Studio</button>
-            </div>
-            <div class="ux-switch" role="group" aria-label="Control detail">
-                <button type="button" class="ux-btn is-active" data-ux="simple" id="ux-simple" title="Fewer controls">Simple</button>
-                <button type="button" class="ux-btn" data-ux="pro" id="ux-pro" title="All controls">Pro</button>
-            </div>
+        <div class="ux-switch" role="group" aria-label="Control detail">
+            <button type="button" class="ux-btn is-active" data-ux="simple" id="ux-simple" title="Fewer controls">Simple</button>
+            <button type="button" class="ux-btn" data-ux="pro" id="ux-pro" title="All controls">Pro</button>
+        </div>
+
+        <div class="mode-switch" role="tablist" aria-label="App mode">
+            <button type="button" class="mode-btn is-active" data-mode="pipeline" role="tab" aria-selected="true">Pipeline</button>
+            <button type="button" class="mode-btn" data-mode="studio" role="tab" aria-selected="false">Studio</button>
         </div>
 
         <div class="top-bar-spacer"></div>
@@ -66,7 +65,7 @@
                 <button type="button" class="step-rail-item is-active" data-step="1"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Upload</span></button>
                 <button type="button" class="step-rail-item" data-step="2"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Align</span></button>
                 <button type="button" class="step-rail-item" data-step="3"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Analyze</span></button>
-                <button type="button" class="step-rail-item" data-step="4"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Clean-up</span></button>
+                <button type="button" class="step-rail-item" data-step="4"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Clean</span></button>
                 <button type="button" class="step-rail-item" data-step="5"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Tune</span></button>
                 <button type="button" class="step-rail-item" data-step="6"><span class="step-ico" aria-hidden="true"></span><span class="step-txt">Mix</span></button>
             </nav>
@@ -821,11 +820,10 @@
         if (sticky && stickyBtn) {
             if (primary && current < 6) {
                 sticky.hidden = false;
-                stickyLabel.textContent = primary.textContent.trim();
-                stickyBtn.textContent = primary.textContent.trim();
+                const label = (primary.textContent || "Continue").replace(/\s+/g, " ").trim();
+                if (stickyLabel) stickyLabel.textContent = label;
+                stickyBtn.textContent = label;
                 stickyBtn.onclick = function () { primary.click(); };
-            } else if (current === 6) {
-                sticky.hidden = true;
             } else {
                 sticky.hidden = true;
             }

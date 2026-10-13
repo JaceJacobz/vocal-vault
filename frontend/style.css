@@ -145,33 +145,7 @@ select {
     gap: 18px;
 }
 
-/* Top bar inside project column */
-.top-bar {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 14px 20px 8px;
-    position: sticky;
-    top: 0;
-    z-index: 20;
-    background: linear-gradient(180deg, rgba(7, 7, 10, 0.96) 60%, transparent);
-    backdrop-filter: blur(8px);
-}
-
-.top-bar .logo-mark {
-    width: 44px;
-    height: 44px;
-    border-radius: 12px;
-}
-
-.top-bar .brand-block h1 {
-    font-size: 1.25rem;
-}
-
-.top-bar .subtitle {
-    font-size: 0.72rem;
-}
-
+/* Top bar — defined fully in MODES section below */
 .top-bar-spacer {
     flex: 1;
 }
@@ -2096,21 +2070,42 @@ footer {
 /* Hide legacy rail if still in DOM */
 .track-rail { display: none !important; }
 
+/* =========================================================
+   TOP BAR — fixed so logo is always on screen
+   Row 1: logo · name · Simple/Pro  (+ roles on wide screens)
+   Row 2: Pipeline | Studio
+   ========================================================= */
+:root {
+    --top-bar-h: 92px;
+}
+
 .top-bar {
-    display: flex;
+    display: grid;
+    grid-template-columns: auto minmax(0, auto) 1fr auto auto;
+    grid-template-areas:
+        "logo brand spacer ux roles"
+        "mode mode mode mode mode";
     align-items: center;
-    gap: 12px;
+    column-gap: 10px;
+    row-gap: 8px;
     padding: 10px 16px;
     border-bottom: 1px solid var(--border);
     background: var(--bg-elevated);
-    backdrop-filter: none;
-    position: sticky;
+    position: fixed;
     top: 0;
-    z-index: 50;
+    left: 0;
+    right: 0;
+    z-index: 200;
     flex-shrink: 0;
 }
 
+/* Push page content below the fixed header */
+.app-shell {
+    padding-top: var(--top-bar-h);
+}
+
 .top-bar .logo-mark {
+    grid-area: logo;
     width: 32px;
     height: 32px;
     border-radius: 6px;
@@ -2126,22 +2121,51 @@ footer {
     width: 72%;
     height: 72%;
     object-fit: contain;
+    display: block;
+}
+
+.top-bar .brand-block {
+    grid-area: brand;
+    min-width: 0;
 }
 
 .top-bar .brand-block h1 {
     font-size: 0.95rem;
     font-weight: 650;
     letter-spacing: -0.01em;
+    margin: 0;
+    line-height: 1.2;
 }
 
 .top-bar .subtitle {
     font-size: 0.68rem;
     color: var(--muted-dim);
+    margin: 0;
+    line-height: 1.2;
 }
 
-.top-bar-spacer { flex: 1; }
+.top-bar .ux-switch {
+    grid-area: ux;
+    justify-self: end;
+}
 
-/* Mode switch — segmented control, not glowing pills */
+.top-bar .mode-switch {
+    grid-area: mode;
+    width: 100%;
+    max-width: 320px;
+    display: flex;
+}
+
+.top-bar-spacer {
+    grid-area: spacer;
+}
+
+.top-bar .pipeline-roles {
+    grid-area: roles;
+    justify-self: end;
+}
+
+/* Mode switch — segmented control */
 .mode-switch {
     display: inline-flex;
     padding: 2px;
@@ -2161,6 +2185,8 @@ footer {
     border-radius: var(--radius-xs);
     cursor: pointer;
     transition: background 0.12s, color 0.12s;
+    flex: 1;
+    text-align: center;
 }
 
 .mode-btn:hover { color: var(--text); }
@@ -2191,17 +2217,18 @@ footer {
 .studio-layout {
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 64px);
-    height: calc(100dvh - 64px);
-    min-height: 420px;
+    height: calc(100vh - 56px);
+    height: calc(100dvh - 56px);
+    min-height: 0;
+    overflow: hidden;
 }
 
 .studio-toolbar {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
-    gap: 12px 16px;
-    padding: 12px 16px;
+    gap: 12px;
+    padding: 10px 14px;
     border-bottom: 1px solid var(--border);
     background: var(--bg-elevated);
     flex-shrink: 0;
@@ -2210,22 +2237,24 @@ footer {
 .studio-beat-slot {
     display: flex;
     align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
+    gap: 8px;
+    flex: 1 1 auto;
+    min-width: 0;
 }
 
 .studio-label {
-    font-size: 11px;
-    font-weight: 700;
+    font-size: 10px;
+    font-weight: 650;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.05em;
     color: var(--muted);
+    flex-shrink: 0;
 }
 
 .studio-file-name {
     font-size: 12px;
     color: var(--text-secondary);
-    max-width: 200px;
+    max-width: 180px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -2234,19 +2263,23 @@ footer {
 .studio-toolbar-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     margin-left: auto;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    flex-shrink: 0;
 }
 
 .studio-tool-btn {
-    padding: 8px 12px !important;
+    padding: 7px 11px !important;
     font-size: 12px !important;
     width: auto !important;
+    min-height: 34px !important;
+    white-space: nowrap;
 }
 
 .studio-send {
-    min-width: 140px;
+    min-width: 0;
+    margin-top: 0 !important;
 }
 
 .studio-select {
@@ -2254,12 +2287,14 @@ footer {
     border: 1px solid var(--border);
     color: var(--text);
     border-radius: var(--radius-sm);
-    padding: 8px 10px;
+    padding: 7px 8px;
     font-size: 12px;
+    min-height: 34px;
 }
 
 /* Timeline */
 .studio-timeline-wrap {
+    position: relative;
     flex: 1;
     min-height: 0;
     display: flex;
@@ -2524,7 +2559,7 @@ footer {
 
 .studio-empty {
     position: absolute;
-    inset: 60px 20px 20px 180px;
+    inset: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -2532,9 +2567,57 @@ footer {
     text-align: center;
     color: var(--muted);
     pointer-events: none;
+    padding: 24px 16px;
+    background: rgba(10, 10, 12, 0.55);
+    z-index: 5;
 }
 
 .studio-empty.hidden { display: none; }
+
+.studio-empty-title {
+    font-size: 15px;
+    font-weight: 650;
+    color: var(--text);
+    margin: 0 0 12px;
+}
+
+.studio-guide {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: left;
+}
+
+.studio-guide li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.guide-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    border: 1px solid var(--border-strong);
+    background: var(--panel);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 650;
+    flex-shrink: 0;
+}
+
+.studio-empty-tip {
+    margin-top: 14px;
+    pointer-events: auto;
+}
 
 .studio-empty p {
     font-size: 15px;
@@ -2584,27 +2667,34 @@ footer {
     flex-wrap: wrap;
 }
 
-/* ========== Studio responsive ========== */
+/* ========== Studio + header responsive ========== */
 @media (max-width: 900px) {
     .studio-layout {
-        height: calc(100vh - 56px);
-        height: calc(100dvh - 56px);
+        height: calc(100vh - 96px);
+        height: calc(100dvh - 96px);
         min-height: 0;
     }
 
     .studio-toolbar {
+        flex-wrap: wrap;
         padding: 10px 12px;
-        gap: 10px;
+        gap: 8px;
+    }
+
+    .studio-beat-slot {
+        width: 100%;
+        flex-wrap: wrap;
     }
 
     .studio-toolbar-actions {
         margin-left: 0;
         width: 100%;
+        flex-wrap: wrap;
     }
 
     .studio-send {
         min-width: 0;
-        flex: 1;
+        flex: 1 1 auto;
     }
 
     .studio-file-name {
@@ -2613,44 +2703,90 @@ footer {
 }
 
 @media (max-width: 720px) {
+    :root {
+        --top-bar-h: 96px;
+    }
+
+    /* Same two rows, tighter — logo always visible */
     .top-bar {
-        flex-wrap: wrap;
-        gap: 10px;
-        padding: 10px 12px;
+        grid-template-columns: auto 1fr auto !important;
+        grid-template-areas:
+            "logo brand ux"
+            "mode mode mode" !important;
+        gap: 8px 10px;
+        padding: 8px 12px;
+        position: fixed !important;
+        top: 0 !important;
+        left: 0 !important;
+        right: 0 !important;
+        z-index: 200 !important;
+    }
+
+    .top-bar .logo-mark {
+        width: 30px !important;
+        height: 30px !important;
+        min-width: 30px;
+        display: grid !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+
+    .top-bar .logo-mark img {
+        display: block !important;
+        width: 72% !important;
+        height: 72% !important;
+    }
+
+    .top-bar .brand-block {
+        display: block !important;
+        visibility: visible !important;
     }
 
     .top-bar .brand-block h1 {
-        font-size: 1.05rem;
+        font-size: 0.9rem;
+        visibility: visible !important;
     }
 
     .top-bar .subtitle {
         display: none;
     }
 
-    .mode-switch {
-        order: 3;
-        width: 100%;
-        justify-content: stretch;
+    .top-bar .ux-switch {
+        display: inline-flex !important;
+        visibility: visible !important;
+        justify-self: end;
+    }
+
+    .top-bar .mode-switch {
+        width: 100% !important;
+        max-width: none !important;
+        display: flex !important;
+        visibility: visible !important;
+    }
+
+    .top-bar-spacer {
+        display: none !important;
     }
 
     .mode-btn {
         flex: 1;
         text-align: center;
-        padding: 9px 12px;
+        padding: 8px 10px;
+        min-height: 38px;
     }
 
     .pipeline-roles {
-        display: none;
+        display: none !important;
     }
 
     .studio-ruler-row,
     .studio-lane {
-        grid-template-columns: 128px 1fr;
+        grid-template-columns: 100px 1fr;
     }
 
     .studio-lane-head {
         padding: 6px 6px;
-        gap: 6px;
+        gap: 4px;
     }
 
     .lane-name-input {
@@ -2683,19 +2819,18 @@ footer {
     }
 
     .studio-empty {
-        inset: 48px 12px 12px 116px;
+        inset: 0;
+        padding: 16px 12px;
     }
 
-    .studio-empty p {
-        font-size: 13px;
+    .studio-empty-title {
+        font-size: 14px;
     }
 
-    .studio-empty span {
-        font-size: 11.5px;
-        max-width: 260px;
+    .studio-guide li {
+        font-size: 12px;
     }
 
-    /* Transport: two rows on tablet/phone */
     .studio-transport {
         flex-wrap: wrap;
         gap: 8px 10px;
@@ -2745,13 +2880,13 @@ footer {
 
 @media (max-width: 480px) {
     .top-bar .logo-mark {
-        width: 34px;
-        height: 34px;
-        border-radius: 9px;
+        width: 28px !important;
+        height: 28px !important;
+        border-radius: 6px;
     }
 
     .top-bar .brand-block h1 {
-        font-size: 0.98rem;
+        font-size: 0.88rem;
     }
 
     .studio-toolbar {
@@ -3071,21 +3206,24 @@ footer {
 
 .ux-switch {
     display: inline-flex;
-    border-radius: 999px;
-    border: 1px solid rgba(168, 85, 247, 0.35);
-    overflow: hidden;
-    background: rgba(20, 12, 40, 0.6);
+    padding: 2px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: var(--bg);
+    gap: 0;
+    flex-shrink: 0;
 }
 
 .ux-btn {
     border: none;
     background: transparent;
     color: var(--muted);
-    font-size: 0.75rem;
+    font-size: 0.72rem;
     font-weight: 550;
-    padding: 0.35rem 0.7rem;
+    padding: 5px 10px;
     border-radius: var(--radius-xs);
     cursor: pointer;
+    min-height: 28px;
 }
 
 .ux-btn.is-active {
@@ -3300,13 +3438,13 @@ footer {
     bottom: 0;
     z-index: 40;
     padding: 0.65rem 0.85rem;
-    margin: 0 -0.5rem;
-    background: rgba(12, 8, 28, 0.92);
-    border-top: 1px solid rgba(168, 85, 247, 0.35);
-    backdrop-filter: blur(10px);
+    margin: 0;
+    background: var(--bg-elevated);
+    border-top: 1px solid var(--border);
+    backdrop-filter: none;
     align-items: center;
-    justify-content: space-between;
-    gap: 0.75rem;
+    justify-content: stretch;
+    gap: 0;
 }
 
 .pipeline-sticky-cta[hidden] {
@@ -3314,12 +3452,14 @@ footer {
 }
 
 .pipeline-sticky-cta .primary-button {
-    flex: 0 0 auto;
+    flex: 1 1 auto;
+    width: 100%;
+    margin-top: 0;
+    min-height: 44px;
 }
 
 #sticky-cta-label {
-    font-size: 0.8rem;
-    color: rgba(233, 213, 255, 0.85);
+    display: none; /* same text as the button — never show both */
 }
 
 @media (max-width: 720px) {
@@ -3327,31 +3467,71 @@ footer {
         display: flex;
     }
 
-    .header-controls {
+    /* Step rail: full words, no ellipsis — equal columns */
+    .step-rail {
         width: 100%;
-        justify-content: space-between;
     }
 
-    .mode-switch,
-    .ux-switch {
-        flex: 1 1 auto;
-        justify-content: center;
-    }
-
-    .mode-btn,
-    .ux-btn {
-        flex: 1;
-        text-align: center;
+    .step-rail-item {
+        flex: 1 1 0;
+        min-width: 0;
+        padding: 0.5rem 0.2rem;
+        font-size: 0.62rem;
+        letter-spacing: 0.02em;
     }
 
     .step-rail-item .step-txt {
-        max-width: 4.5rem;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        max-width: none;
+        overflow: visible;
+        text-overflow: clip;
+        white-space: nowrap;
     }
 
+    /* Fixed bottom CTA — one button only, no duplicate label */
     .pipeline-sticky-cta:not([hidden]) {
         display: flex;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 60;
+        margin: 0;
+        padding: 10px 12px calc(10px + env(safe-area-inset-bottom, 0px));
+        background: var(--bg-elevated);
+        border-top: 1px solid var(--border);
+        box-shadow: 0 -4px 20px rgba(0, 0, 0, 0.35);
+    }
+
+    .pipeline-sticky-cta .primary-button {
+        width: 100%;
+        margin: 0;
+    }
+
+    /* Room above fixed bar so content isn’t covered */
+    #mode-pipeline #app-container {
+        padding-bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+    }
+
+    /* Hide in-section primary when sticky mirrors it (not on Mix — sticky is off there) */
+    .app-step:not(#mix-section) > .primary-button {
+        display: none;
+    }
+
+    .upload-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    .upload-card {
+        padding: 14px;
+    }
+
+    .upload-card input[type="file"] {
+        font-size: 12px;
+    }
+
+    .upload-card input[type="file"]::file-selector-button {
+        padding: 10px 12px;
+        min-height: 40px;
     }
 
     .mix-options {
@@ -3628,26 +3808,6 @@ body.vv-modal-open {
         gap: 10px;
     }
 
-    .header-controls {
-        width: 100%;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-    }
-
-    .mode-switch,
-    .ux-switch {
-        width: 100%;
-        display: flex;
-    }
-
-    .mode-btn,
-    .ux-btn {
-        flex: 1;
-        min-height: 40px;
-        font-size: 0.85rem;
-    }
-
     .app-step {
         padding: 16px 14px;
         border-radius: 14px;
@@ -3834,15 +3994,12 @@ body.vv-modal-open {
         max-width: min(16rem, calc(100vw - 2rem));
     }
 
-    /* Keep Simple/Pro clear on small screens */
-    .ux-switch {
-        order: -1;
-    }
 }
 
 @media (max-width: 400px) {
-    .step-rail-item .step-txt {
-        max-width: 3.2rem;
+    .step-rail-item {
+        font-size: 0.58rem;
+        padding: 0.45rem 0.15rem;
     }
 
     .step-heading h2 {
