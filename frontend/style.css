@@ -2076,7 +2076,8 @@ footer {
    Row 2: Pipeline | Studio
    ========================================================= */
 :root {
-    --top-bar-h: 92px;
+    --top-bar-h: 104px;
+    --studio-toolbar-h: 56px;
 }
 
 .top-bar {
@@ -2198,11 +2199,14 @@ footer {
 }
 
 .mode-panel {
-    flex: 1;
+    flex: 1 1 auto;
     min-height: 0;
     display: flex;
     flex-direction: column;
     overflow: auto;
+    /* Fill space under fixed header */
+    height: calc(100dvh - var(--top-bar-h, 92px));
+    max-height: calc(100dvh - var(--top-bar-h, 92px));
 }
 
 .mode-panel.hidden { display: none !important; }
@@ -2217,21 +2221,57 @@ footer {
 .studio-layout {
     display: flex;
     flex-direction: column;
-    height: calc(100vh - 56px);
-    height: calc(100dvh - 56px);
+    height: 100%;
+    max-height: 100%;
     min-height: 0;
     overflow: hidden;
 }
 
 .studio-toolbar {
-    display: flex;
-    flex-wrap: nowrap;
+    display: flex !important;
+    flex-wrap: wrap;
     align-items: center;
-    gap: 12px;
+    gap: 8px 12px;
     padding: 10px 14px;
     border-bottom: 1px solid var(--border);
     background: var(--bg-elevated);
     flex-shrink: 0;
+    z-index: 190;
+    visibility: visible !important;
+    opacity: 1 !important;
+    min-height: 48px;
+}
+
+/* Pin toolbar under fixed header so it never scrolls away or gets clipped */
+.app-shell.mode-studio .studio-toolbar {
+    position: fixed;
+    top: var(--top-bar-h);
+    left: 0;
+    right: 0;
+    box-shadow: 0 1px 0 var(--border);
+}
+
+.app-shell.mode-studio .studio-layout {
+    padding-top: var(--studio-toolbar-h);
+}
+
+.app-shell.mode-studio .studio-toolbar .studio-tool-btn,
+.app-shell.mode-studio .studio-toolbar .studio-send {
+    display: inline-flex !important;
+    visibility: visible !important;
+    align-items: center;
+    justify-content: center;
+}
+
+.app-shell.mode-studio .studio-toolbar .studio-select {
+    display: inline-block !important;
+    visibility: visible !important;
+}
+
+.app-shell.mode-studio .studio-toolbar .studio-beat-slot,
+.app-shell.mode-studio .studio-toolbar .studio-toolbar-actions {
+    display: flex !important;
+    visibility: visible !important;
 }
 
 .studio-beat-slot {
@@ -2670,8 +2710,8 @@ footer {
 /* ========== Studio + header responsive ========== */
 @media (max-width: 900px) {
     .studio-layout {
-        height: calc(100vh - 96px);
-        height: calc(100dvh - 96px);
+        height: 100%;
+        max-height: 100%;
         min-height: 0;
     }
 
@@ -2679,6 +2719,11 @@ footer {
         flex-wrap: wrap;
         padding: 10px 12px;
         gap: 8px;
+        /* Stay under fixed header while timeline scrolls */
+        position: sticky;
+        top: 0;
+        z-index: 40;
+        background: var(--bg-elevated);
     }
 
     .studio-beat-slot {
@@ -2691,6 +2736,15 @@ footer {
         width: 100%;
         flex-wrap: wrap;
     }
+
+    .studio-tool-btn,
+    .studio-send,
+    .studio-select {
+        display: inline-flex !important;
+        visibility: visible !important;
+        opacity: 1 !important;
+    }
+}
 
     .studio-send {
         min-width: 0;
@@ -2705,6 +2759,7 @@ footer {
 @media (max-width: 720px) {
     :root {
         --top-bar-h: 96px;
+        --studio-toolbar-h: 120px;
     }
 
     /* Same two rows, tighter — logo always visible */
@@ -2879,6 +2934,10 @@ footer {
 }
 
 @media (max-width: 480px) {
+    :root {
+        --studio-toolbar-h: 140px;
+    }
+
     .top-bar .logo-mark {
         width: 28px !important;
         height: 28px !important;
@@ -2894,11 +2953,17 @@ footer {
         align-items: stretch;
         padding: 8px 10px;
         gap: 8px;
+        display: flex !important;
+        visibility: visible !important;
+        background: var(--bg-elevated);
+        border-bottom: 1px solid var(--border);
     }
 
     .studio-beat-slot {
         width: 100%;
-        justify-content: space-between;
+        justify-content: flex-start;
+        display: flex !important;
+        gap: 8px;
     }
 
     .studio-label {
@@ -2912,10 +2977,11 @@ footer {
     }
 
     .studio-toolbar-actions {
-        display: grid;
+        display: grid !important;
         grid-template-columns: 1fr 1fr;
         gap: 8px;
         width: 100%;
+        visibility: visible !important;
     }
 
     .studio-toolbar-actions .studio-select {
@@ -2930,11 +2996,14 @@ footer {
         justify-content: center;
         padding: 11px 10px !important;
         font-size: 12.5px !important;
+        display: inline-flex !important;
+        visibility: visible !important;
     }
 
     .studio-send {
         grid-column: 1 / -1;
     }
+}
 
     .studio-ruler-row,
     .studio-lane {
