@@ -231,6 +231,9 @@ document.addEventListener("DOMContentLoaded", () => {
     function showResults(result) {
 
         results.classList.remove("hidden");
+        if (typeof window.vvRefreshPipelineChrome === "function") {
+            try { window.vvRefreshPipelineChrome(); } catch (e) {}
+        }
 
         const rows = [["original", "Original"]];
         if (result.stats.detuned) rows.push(["detuned", "Detuned (test)"]);

@@ -258,6 +258,21 @@ if (typeof module !== "undefined") {
     document.addEventListener("DOMContentLoaded", () => {
         const style = document.getElementById("mix-style");
         const polish = document.getElementById("mix-polish");
+        const P = window.VocalVaultPresets;
+        // Rebuild style list from presets so Auto-detect and any new styles appear
+        if (style && P && P.listStyles) {
+            const cur = style.value || "auto";
+            const list = P.listStyles();
+            style.innerHTML = "";
+            for (const s of list) {
+                const opt = document.createElement("option");
+                opt.value = s.id;
+                opt.textContent = s.label;
+                style.appendChild(opt);
+            }
+            if ([...style.options].some((o) => o.value === cur)) style.value = cur;
+            else if ([...style.options].some((o) => o.value === "auto")) style.value = "auto";
+        }
         if (style) style.addEventListener("change", updateStyleHint);
         if (polish) polish.addEventListener("change", updateStyleHint);
         updateStyleHint();

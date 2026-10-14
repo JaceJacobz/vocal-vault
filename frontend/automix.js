@@ -19,7 +19,7 @@
  *     window.VocalVaultAutomix.process(window.VocalVaultState) -> AudioBuffer
  *
  * Optional settings on the state object:
- *     state.masterTargetLufs   loudness target, default -14
+ *     state.masterTargetLufs   loudness target, default -12
  */
 
 (function () {
@@ -645,22 +645,15 @@ function applyAdaptiveRecipe(recipe, assessment, balanceMode) {
     r.vocalAboveBeatDb = Math.min(r.vocalAboveBeatDb != null ? r.vocalAboveBeatDb : 0.8, 0.4);
     r._adaptiveNote = "Light path: this take was already loud/pushed — less hype so strain stays natural.";
   } else if (path === "smooth") {
-    // Raw/quiet home takes: evening yes, but do NOT brighten the top —
-    // air + master makeup is what makes them sound like a cheap mic.
-    const quiet = (assessment && assessment.rmsDb != null && assessment.rmsDb < -20);
-    r.eq.presenceDb = Math.min(r.eq.presenceDb != null ? r.eq.presenceDb : 1.2, quiet ? 1.0 : 1.35);
-    r.eq.airDb = Math.min(r.eq.airDb != null ? r.eq.airDb : 1.2, quiet ? 0.7 : 1.15);
-    r.eq.boostStrength = Math.min(r.eq.boostStrength != null ? r.eq.boostStrength : 0.4, quiet ? 0.32 : 0.4);
+    r.eq.presenceDb = Math.max(r.eq.presenceDb != null ? r.eq.presenceDb : 1, 1.0);
+    r.eq.airDb = Math.min(Math.max(r.eq.airDb != null ? r.eq.airDb : 1.2, 1.0), 1.6);
     r.presenceDb = r.eq.presenceDb;
     r.airDb = r.eq.airDb;
-    r.sat = { drive: Math.min(r.sat.drive, 1.35), mix: Math.min(r.sat.mix, 0.07) };
-    r.compressTightenDb = Math.max(r.compressTightenDb || 0, 1.5);
-    r._levelerExtraDb = quiet ? 1.6 : 2.2;
-    r.vocalAboveBeatDb = Math.min(r.vocalAboveBeatDb != null ? r.vocalAboveBeatDb : 0.5, 0.35);
-    r._quietTake = !!quiet;
-    r._adaptiveNote = quiet
-      ? "Smooth path on a quiet take: evened the performance, kept the top gentle so noise stays down after mastering."
-      : "Smooth path: take sounded raw/uneven — more evening, gentle polish (not more grit).";
+    r.sat = { drive: Math.min(r.sat.drive, 1.4), mix: Math.min(r.sat.mix, 0.09) };
+    r.compressTightenDb = Math.max(r.compressTightenDb || 0, 1.8);
+    r._levelerExtraDb = 2.5;
+    r.vocalAboveBeatDb = r.vocalAboveBeatDb != null ? r.vocalAboveBeatDb : 0.8;
+    r._adaptiveNote = "Smooth path: take sounded raw/uneven — more evening, gentle polish (not more grit).";
   } else {
     r._adaptiveNote = "Full path: balanced polish for this take.";
   }
@@ -685,8 +678,20 @@ async function processAutomix(state, options) {
   const Levels = window.VocalVaultLevels;
   const Studio = window.VocalVaultStudio;
   const Presets = window.VocalVaultPresets;
+  // Genre sensor: "Auto" listens to the beat and picks the style. It also tells Amapiano from Afrobeats for the fill.
+  let styleId = opt.style || "universal";
+  let genreInfo = null;
+  const Genre = window.VocalVaultGenre;
+  if (Genre && Genre.detect && (styleId === "auto" || (opt.fillInstruments && styleId === "afrobeats"))) {
+    try {
+      const bch = [];
+      for (let c = 0; c < beat.numberOfChannels; c++) bch.push(beat.getChannelData(c));
+      genreInfo = Genre.detect(bch, beat.sampleRate, { bpm: state.beatBpm || state.bpm || 100 });
+    } catch (e) { console.error("Genre sensor failed:", e); genreInfo = null; }
+  }
+  if (styleId === "auto") styleId = genreInfo ? genreInfo.styleId : "universal";
   let recipe = Presets && Presets.resolve
-    ? Presets.resolve(opt.style || "universal", opt.polishLevel || "radio")
+    ? Presets.resolve(styleId, opt.polishLevel || "radio")
     : null;
 
   const metadata = {};
@@ -709,6 +714,14 @@ async function processAutomix(state, options) {
   const lines = [];
   const polish = !!(Studio && opt.polish);
 
+  if (opt.style === "auto") {
+    if (genreInfo && genreInfo.decided) {
+      lines.push(`Listened to the beat: it sounds like ${genreInfo.label} (${Math.round(genreInfo.confidence * 100)}% sure)` +
+        (genreInfo.reasons.length ? ` — ${genreInfo.reasons.join(", ")}` : "") + `. Used the ${genreInfo.styleId === "afrobeats" ? "Afrobeats / Amapiano" : genreInfo.label} style.`);
+    } else {
+      lines.push("Listened to the beat, but it did not clearly match one style, so the Universal style was used. You can pick a style yourself if you know it.");
+    }
+  }
   if (recipe) {
     lines.push(`Style: ${recipe.styleLabel} · Polish: ${recipe.polishLabel} — ${recipe.blurb}`);
     if (recipe._adaptiveNote) lines.push(recipe._adaptiveNote);
@@ -729,10 +742,6 @@ async function processAutomix(state, options) {
     await nextFrame();
     const prepOpts = { highPassHz: first.hpfCutoff };
     if (recipe) prepOpts.eq = recipe.eq;
-    // Quiet / raw home takes: do not chase a bright studio EQ curve
-    if ((recipe && recipe._quietTake) || (assessment && assessment.rmsDb != null && assessment.rmsDb < -20)) {
-      prepOpts.quietTake = true;
-    }
     const prepared = Studio.prepareVocal(vocal, prepOpts);
     lines.push(...prepared.report);
     working = prepared.buffer;
@@ -806,19 +815,16 @@ async function processAutomix(state, options) {
     if (balanceMode === "closer") above = Math.min(above, -0.3);
     else if (balanceMode === "forward") above = Math.min(1.2, Math.max(above, 0.6));
     else above = Math.min(above, 0.25); // balanced → essentially match
-    // Quiet takes: cap how hard we boost so noise floor stays controlled
-    const quietSrc = (params.vocalStats && params.vocalStats.rmsDb != null && params.vocalStats.rmsDb < -18);
     levelOptions = Object.assign({}, levelOptions || {}, {
       vocalAboveBeatDb: above,
       vocalPeakCeilingDb: -1.2,
-      maxGainDb: quietSrc ? 4.5 : 6
+      maxGainDb: 6
     });
   } else {
-    const quietSrc = (params.vocalStats && params.vocalStats.rmsDb != null && params.vocalStats.rmsDb < -18);
     levelOptions = Object.assign({}, levelOptions || {}, {
       vocalAboveBeatDb: balanceMode === "forward" ? 0.8 : (balanceMode === "closer" ? -0.3 : 0),
       vocalPeakCeilingDb: -1.2,
-      maxGainDb: quietSrc ? 4.5 : 6
+      maxGainDb: 6
     });
   }
   const vocalChannels = channelsOf(finished).map((c) => engine.resample(c, finished.sampleRate, sr));
@@ -860,6 +866,7 @@ async function processAutomix(state, options) {
       scale: scaleName,
       keyKnown: keyKnown,
       style: recipe ? recipe.styleId : "universal",
+      subgenre: genreInfo && genreInfo.sub ? genreInfo.sub : null,
       tuningCents: (state.tuneOptions && state.tuneOptions.refCents) || 0,
       strength: 0.75
     });
@@ -1031,38 +1038,20 @@ async function processAutomix(state, options) {
     lines.push("Skipped the shared room: the vocal needs to stay dry and forward.");
   }
 
-  // 6. Master — light by default; quieter still on quiet/raw takes
+  // 6. Master
   let masterInfo = null;
   if (opt.master) {
     setStatus("Mastering…");
     await nextFrame();
-    let target = typeof state.masterTargetLufs === "number" ? state.masterTargetLufs : -14;
-    let maxLim = 4.0;
-    // Quiet source already got a big level-match boost; another hard master
-    // push is what makes the noise floor and mic texture obvious.
-    const quietTake = !!(recipe && recipe._quietTake) ||
-      (assessment && assessment.rmsDb != null && assessment.rmsDb < -20) ||
-      (params.vocalStats && params.vocalStats.rmsDb != null && params.vocalStats.rmsDb < -18);
-    if (quietTake) {
-      target = Math.min(target, -14.5);
-      maxLim = 3.0;
-      lines.push("Quiet take detected: mastering held back so raising the voice does not raise the noise floor with it.");
-    }
-    const m = Studio.master(channels, sr, {
-      targetLufs: target,
-      maxLimiterDb: maxLim,
-      ceilingDb: -1
-    });
+    const target = typeof state.masterTargetLufs === "number" ? state.masterTargetLufs : -12;
+    const m = Studio.master(channels, sr, { targetLufs: target });
     channels = m.channels;
     masterInfo = m.report;
     if (masterInfo.lowEnd && masterInfo.lowEnd.length) lines.push(...masterInfo.lowEnd);
     lines.push(`Mastered to ${masterInfo.outputLufs.toFixed(1)} LUFS (was ${masterInfo.inputLufs.toFixed(1)}), true peak ${masterInfo.truePeakDb.toFixed(1)} dBTP` +
       (masterInfo.limiterMaxDb >= 0.5 ? `, limiter working up to ${masterInfo.limiterMaxDb.toFixed(1)} dB.` : ", limiter barely needed."));
-    if (masterInfo.glueMaxDb >= 1.5) {
-      lines.push(`Light bus glue (~${masterInfo.glueMaxDb.toFixed(1)} dB) — kept gentle so the vocal stays open.`);
-    }
     if (masterInfo.outputLufs < target - 0.6) {
-      lines.push(`Stopped ${(target - masterInfo.outputLufs).toFixed(1)} LU short of the ${target} LUFS target on purpose: more limiting would squash the mix and make the vocal sound thin. Pick a quieter target (or leave this) for a more open sound.`);
+      lines.push(`Stopped ${(target - masterInfo.outputLufs).toFixed(1)} LU short of the ${target} LUFS target: getting there would take more than 8 dB of limiting on this track, which would squash the drums. Choose a quieter target for a more open sound.`);
     }
   } else {
     // safety: never hand back a mix that clips

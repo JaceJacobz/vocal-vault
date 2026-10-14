@@ -53,13 +53,15 @@
         rnb: { kick: [0, 7, 10], snare: [4, 12], hat: "eighths" },
         rap: { kick: [0, 6, 10], snare: [4, 12], hat: "eighths" },
         trap: { kick: [0, 7, 11], snare: [8], hat: "sixteenths" },
-        afrobeats: { kick: [0, 7, 10], snare: [4, 12], hat: "sixteenths" }
+        afrobeats: { kick: [0, 6, 10], snare: [4, 12], hat: "sixteenths" }
     };
 
     // How far under the beat's own level each added layer sits (dB), when the part is fully missing / only partly there.
     const LEVEL_DB = {
         kick: [10, 16], snare: [13, 19], hat: [19, 25], bass: [12, 18],
-        chord: [18, 23], piano: [21, 26], strings: [24, 28]
+        chord: [18, 23], piano: [21, 26], strings: [24, 28],
+        // Afrobeats pack
+        clap: [14, 20], shaker: [20, 26], conga: [21, 27], logdrum: [12, 18], pluck: [21, 26]
     };
 
     // Same energy yardsticks as before: how loud each band is against the whole beat when the part is "ok".
@@ -212,11 +214,11 @@
                 }
                 if (tot > 0) for (let p = 0; p < 12; p++) chroma[p] += tmp[p] / tot;
                 if (midTot > 0) { const m = Array.from(mid).sort((a, b) => b - a); res.midTonal += (m[0] + m[1] + m[2]) / midTot; }
-                // low band: how much of the 40-140 Hz power sits at one pitch, and what share of the beat's power it is
+                // low band: how much of the 40-140 Hz power sits at one pitch, and what share of the low-mid (40-800 Hz) power it is
                 let pw = 0, maxP = 0, maxK = 0, totPw = 0;
                 const kLo = Math.ceil(40 / binHz), kHi = Math.floor(140 / binHz), P = [];
                 for (let k = kLo; k <= kHi; k++) { const q = re[k] * re[k] + im[k] * im[k]; P.push(q); pw += q; if (q > maxP) { maxP = q; maxK = k - kLo; } }
-                for (let k = kLo; k < Math.floor(5000 / binHz); k++) totPw += re[k] * re[k] + im[k] * im[k];
+                for (let k = kLo; k < Math.floor(800 / binHz); k++) totPw += re[k] * re[k] + im[k] * im[k];
                 // judged on the window where the low end is strongest (a staccato bass is silent between its notes)
                 const share = 10 * Math.log10(Math.max(pw, 1e-30) / Math.max(totPw, 1e-30));
                 if (share > bestShare) { bestShare = share; res.lowTonal = pw > 0 ? ((P[maxK - 1] || 0) + P[maxK] + (P[maxK + 1] || 0)) / pw : 0; }
@@ -275,29 +277,36 @@
 
             const BANDS = {
                 kick: [40, 110], snare: [180, 400], crack: [2000, 5000], hat: [6000, 12000],
-                bass: [50, 250], low: [40, 160], chord: [300, 900], pad: [600, 2000], piano: [400, 2500]
+                bass: [50, 250], low: [40, 160], chord: [300, 900], pad: [600, 2000], piano: [400, 2500], perc: [250, 1000]
             };
             const E = {};
             for (const k in BANDS) E[k] = frameRms(bandpass(mono, BANDS[k][0], BANDS[k][1], sr), hop, frames);
             E.full = frameRms(mono, hop, frames);
             E.snareCombo = new Float32Array(frames);
-            for (let f = 0; f < frames; f++) E.snareCombo[f] = Math.sqrt(E.snare[f] ** 2 + E.crack[f] ** 2);
+            for (let f = 0; f < frames; f++) E.snareCombo[f] = Math.sqrt(E.crack[f] ** 2 + (0.35 * E.snare[f]) ** 2);
 
-            const F = { kick: flux(E.kick), snare: flux(E.snareCombo), hat: flux(E.hat), bass: flux(E.bass) };
+            const F = { kick: flux(E.kick), snare: flux(E.snareCombo), hat: flux(E.hat), bass: flux(E.bass), perc: flux(E.perc), chord: flux(E.chord) };
 
             // --- grid ---
             const mk = meanOf(F.kick) + 1e-12, ms = meanOf(F.snare) + 1e-12, mh = meanOf(F.hat) + 1e-12, mb = meanOf(F.bass) + 1e-12;
+            const mc = meanOf(F.chord) + 1e-12;
             const O = new Float32Array(frames);
-            for (let f = 0; f < frames; f++) O[f] = F.kick[f] / mk + F.snare[f] / ms + 0.6 * F.hat[f] / mh + 0.5 * F.bass[f] / mb;
+            // chord changes are strong cues for where the bars start (they usually change on beat 1)
+            for (let f = 0; f < frames; f++) O[f] = F.kick[f] / mk + F.snare[f] / ms + 0.6 * F.hat[f] / mh + 0.5 * F.bass[f] / mb + 0.5 * F.chord[f] / mc;
             const bpmIn = clamp(o.bpm || 90, 60, 180);
             const grid = findGrid(O, hopSec, bpmIn);
             const P = grid.periodFrames;
 
             // --- which of the four beats is beat 1 ---
             const lowO = triSmooth(F.kick, 1), bassO = triSmooth(F.bass, 1);
-            const downScore = [0, 0, 0, 0];
+            const downScore = [0, 0, 0, 0], clapScore = [0, 0, 0, 0], snareO = triSmooth(F.snare, 1), chordO = triSmooth(F.chord, 2);
             let k = 0;
-            for (let pos = grid.phaseFrames; pos < frames - 2; pos += P, k++) downScore[k % 4] += interp(lowO, pos) / mk + 0.5 * interp(bassO, pos) / mb;
+            for (let pos = grid.phaseFrames; pos < frames - 2; pos += P, k++) {
+                downScore[k % 4] += interp(lowO, pos) / mk + 0.5 * interp(bassO, pos) / mb + 0.8 * interp(chordO, pos) / mc;
+                clapScore[k % 4] += interp(snareO, pos) / ms;
+            }
+            // a clap or snare on beats 2 and 4 puts beat 1 one beat before each of them (weighted lightly: half-time styles differ)
+            for (let i = 0; i < 4; i++) downScore[i] += 0.35 * (clapScore[(i + 1) % 4] + clapScore[(i + 3) % 4]) / 2;
             let b0 = 0;
             for (let i = 1; i < 4; i++) if (downScore[i] > downScore[b0]) b0 = i;
             const sorted = downScore.slice().sort((a, b) => b - a);
@@ -318,17 +327,21 @@
                 const bar = { j: j, a: a, b: b, startFrame: fa };
                 let sf = 0; for (let f = a; f < b; f++) sf += E.full[f] ** 2;
                 bar.fullDb = dbOf(Math.sqrt(sf / (b - a)));
+                bar.fullLin = Math.sqrt(sf / (b - a));
                 bar.rel = {}; bar.peaks = {};
+                // measured on the inside of the bar, so the neighbouring bars' note starts do not leak into this bar's levels
+                const trimF = Math.round(0.05 * (b - a)), ra = a + trimF, rb = b - trimF;
                 const names = { kick: E.kick, snare: E.snareCombo, hat: E.hat, bass: E.bass, low: E.low, chord: E.chord, pad: E.pad, piano: E.piano };
                 for (const nm in names) {
-                    let s = 0; for (let f = a; f < b; f++) s += names[nm][f] ** 2;
-                    bar.rel[nm] = dbOf(Math.sqrt(s / (b - a))) - bar.fullDb;
+                    let s = 0; for (let f = ra; f < rb; f++) s += names[nm][f] ** 2;
+                    let sFull = 0; for (let f = ra; f < rb; f++) sFull += E.full[f] ** 2;
+                    bar.rel[nm] = dbOf(Math.sqrt(s / (rb - ra))) - dbOf(Math.sqrt(sFull / (rb - ra)));
                 }
                 // how many separate hits does a percussive band make in this bar? A hit must jump well above the band's
                 // own average level; the ripple of a sustained pad or bass note never does.
-                const bandOf = { kick: E.kick, snare: E.snareCombo, hat: E.hat };
-                const decayFrames = { kick: Math.round(0.12 / hopSec), snare: Math.round(0.08 / hopSec), hat: Math.round(0.04 / hopSec) };
-                for (const nm of ["kick", "snare", "hat"]) {
+                const bandOf = { kick: E.kick, snare: E.snareCombo, hat: E.hat, perc: E.perc };
+                const decayFrames = { kick: Math.round(0.12 / hopSec), snare: Math.round(0.08 / hopSec), hat: Math.round(0.04 / hopSec), perc: Math.round(0.06 / hopSec) };
+                for (const nm of ["kick", "snare", "hat", "perc"]) {
                     const fl = F[nm], be = bandOf[nm];
                     let mx = 0, mean = 0; for (let f = a; f < b; f++) { if (fl[f] > mx) mx = fl[f]; mean += be[f]; }
                     mean /= (b - a);
@@ -346,6 +359,22 @@
                         }
                     }
                     bar.peaks[nm] = count;
+                    // Does one step of the bar stand out from the rest? A snare or clap is a hit that is clearly bigger than the
+                    // others; a shaker or hat pattern is a row of equal hits, and a bass or kick only leaks a little into this band.
+                    if (nm === "snare") {
+                        const stepF = grid.periodFrames / 4, vals = [], kvals = [];
+                        for (let st = 0; st < 16; st++) {
+                            const c = Math.round(bar.startFrame + st * stepF);
+                            let m = 0, km = 0;
+                            for (let f2 = c - 2; f2 <= c + 2; f2++) if (f2 >= 0 && f2 < frames) { if (fl[f2] > m) m = fl[f2]; if (F.kick[f2] > km) km = F.kick[f2]; }
+                            vals.push(m); kvals.push(km);
+                        }
+                        const sortedV = vals.slice().sort((x, y) => x - y), medV = sortedV[8], maxV = sortedV[15];
+                        bar.snareContrast = maxV / Math.max(medV, 1e-12);
+                        // an accented shaker has FOUR equally strong pushed hits; a snare or clap has one to three
+                        bar.snareStandouts = vals.filter(v => v > 0.6 * maxV).length;
+                        bar.snareHitFloor = maxV > 0.01 * bar.fullLin;       // a real hit is not tiny next to the beat itself
+                    }
                 }
                 bars.push(bar);
             }
@@ -359,6 +388,7 @@
             const globalChroma = new Float64Array(12);
             for (const b of bars) {
                 if (!b.on) continue;
+                if (o.skipHarmony) { b.chroma = new Float64Array(12); b.midTonal = 0; b.lowTonal = 0; b.lowShareDb = -99; b.tonalOk = false; continue; }
                 // analyse the inside of the bar, so the neighbouring bars' note starts and chord changes do not leak in
                 const trim = Math.round(0.06 * (b.b - b.a) * hop);
                 const seg = chromaOfSegment(mono, sr, Math.round(b.a * hop) + trim, Math.round(b.b * hop) - trim, N);
@@ -380,13 +410,18 @@
                     if (b.peaks[nm] >= minHits) st = rel >= thr - 14 ? 0 : 1;
                     else if (b.peaks[nm] >= 1 && rel >= thr - 8) st = 1;
                     else st = 2;
+                    // a row of equal hits (shaker, hats) leaking into the snare band is not a snare or clap
+                    if (nm === "snare" && st < 2 && (b.snareContrast < 2.2 || !b.snareHitFloor)) st = 2;
                     b.status[nm] = ["ok", "thin", "missing"][st];
                 }
-                // bass: a pitched low note, not a kick's sweep and not a pad's low leakage
-                b.status.bass = (b.lowTonal >= 0.3 && b.lowShareDb >= -18) ? "ok" : ((b.lowTonal >= 0.2 && b.lowShareDb >= -26) ? "thin" : "missing");
+                // Bass. A kick alone cannot be told apart reliably from a kick plus a bass line, and adding a synth bass over a real
+                // one is worse than missing one, so bass only counts as missing when the beat has almost no low end at all.
+                b.status.bass = b.rel.low < -15 ? "missing" : (b.rel.low < -10 ? "thin" : "ok");
                 // harmony (chords, pads, keys): notes concentrated on a few pitch classes in the mid range
-                const hs = !b.tonalOk ? "missing" : (b.midTonal >= 0.42 ? "ok" : (b.midTonal >= 0.34 ? "thin" : "missing"));
+                const hs = !b.tonalOk ? "missing" : (b.midTonal >= 0.39 ? "ok" : (b.midTonal >= 0.33 ? "thin" : "missing"));
                 b.status.chord = b.status.pad = b.status.piano = hs;
+                // hand percussion (congas, bongos, tumbao patterns): many short pitched hits in the mid range
+                b.status.perc = b.peaks.perc >= 5 ? "ok" : (b.peaks.perc >= 3 ? "thin" : "missing");
                 // drums that really play in this bar (a hit pattern, not leakage)
                 b.percPresent = ["kick", "snare", "hat"].filter(nm => b.peaks[nm] >= (nm === "hat" ? 4 : 2) && b.status[nm] !== "missing").length;
             }
@@ -429,7 +464,7 @@
 
             // --- key ---
             let key = { rootPc: o.rootPc || 0, scale: o.scale || "major", source: "given" };
-            if (o.keyKnown === false) {
+            if (o.keyKnown === false && !o.skipHarmony) {
                 const est = estimateKey(globalChroma);
                 key = { rootPc: est.rootPc, scale: est.scale, source: "estimated", r: est.r };
             }
@@ -487,8 +522,10 @@
 
             const classes = {
                 kick: classify(A, "kick", grooveBar), snare: classify(A, "snare", grooveBar), hat: classify(A, "hat", grooveBar),
-                bass: classify(A, "bass", grooveBar), chord: classify(A, "chord", anyBar), pad: classify(A, "pad", anyBar), piano: classify(A, "piano", anyBar)
+                bass: classify(A, "bass", grooveBar), chord: classify(A, "chord", anyBar), pad: classify(A, "pad", anyBar), piano: classify(A, "piano", anyBar),
+                perc: classify(A, "perc", grooveBar)
             };
+            const afro = options.style === "afrobeats", amapiano = afro && options.subgenre === "amapiano";
             for (const nm in classes) detection.presence[nm] = classes[nm].cls === "ok" ? "ok" : (classes[nm].cls === "partial" ? "thin" : "missing");
 
             const lines = [];
@@ -512,7 +549,15 @@
                     else if (nm === "snare") steps = def.snare.slice();
                     else { hatMode = def.hat; steps = []; for (let s = 0; s < 16; s += (hatMode === "sixteenths" ? 1 : 2)) steps.push(s); }
                 }
-                items[nm] = { inst: nm, level: c.cls === "missing" ? 0 : 1, bars: targets, steps: steps, learned: learned, hatMode: hatMode };
+                // Afrobeats uses a clap where other styles use a snare, and a shaker where they use hats
+                const name = afro && nm === "snare" ? "clap" : (afro && nm === "hat" ? "shaker" : nm);
+                items[name] = { inst: name, level: c.cls === "missing" ? 0 : 1, bars: targets, steps: steps, learned: learned, hatMode: hatMode };
+            }
+            // hand percussion (Afrobeats): congas/bongos in a tumbao-style pattern when the beat has none
+            // (it cannot be told apart reliably from claps and shakers, so it is only added when the beat has no other percussion either)
+            if (afro && classes.perc.cls !== "ok" && classes.hat.cls !== "ok" && classes.snare.cls !== "ok") {
+                const c = classes.perc, targets = fillBars(c);
+                if (targets.length) items.conga = { inst: "conga", level: c.cls === "missing" ? 0 : 1, bars: targets, steps: [3, 6, 7, 10, 11, 14] };
             }
 
             // harmony (needs a chord for each bar)
@@ -536,9 +581,11 @@
                 }
             }
 
-            if (classes.bass.cls !== "ok") {
+            if (classes.bass.cls === "missing") {
                 const c = classes.bass;
-                items.bass = { inst: "bass", level: c.cls === "missing" ? 0 : 1, bars: fillBars(c) };
+                // Amapiano's signature low end is the log drum, not a sustained bass
+                const bn = amapiano ? "logdrum" : "bass";
+                items[bn] = { inst: bn, level: c.cls === "missing" ? 0 : 1, bars: fillBars(c) };
             }
             // chords, pads and keys are judged together: if the beat has harmony, nothing harmonic is added
             const hc = classes.chord;
@@ -547,6 +594,7 @@
                 items.chord = { inst: "chord", level: 0, bars: fillBars(hc) };
                 if (soft) items.piano = { inst: "piano", level: 0, bars: fillBars(hc) };
                 items.strings = { inst: "strings", level: 0, bars: fillBars(hc) };
+                if (afro) items.pluck = { inst: "pluck", level: 0, bars: fillBars(hc) };     // highlife-style guitar pluck
             } else if (hc.cls === "partial") {
                 items.chord = { inst: "chord", level: 1, bars: fillBars(hc) };
             }
@@ -628,6 +676,70 @@
             return out;
         }
 
+        // --- Afrobeats pack ---
+        function synthClap(sr, rnd) {
+            const n = Math.round(0.16 * sr), out = new Float32Array(n);
+            const aLp = 1 - Math.exp(-2 * Math.PI * 4200 / sr), aHp = 1 - Math.exp(-2 * Math.PI * 900 / sr);
+            let lp = 0, hp = 0;
+            const bursts = [0, 0.009, 0.019];
+            for (let i = 0; i < n; i++) {
+                const t = i / sr;
+                lp += aLp * ((rnd() * 2 - 1) - lp); hp += aHp * (lp - hp);
+                let env = 0.55 * Math.exp(-Math.max(0, t - 0.028) * 28) * (t >= 0.028 ? 1 : 0);
+                for (const b of bursts) if (t >= b && t < b + 0.008) env = Math.max(env, 0.9 * Math.exp(-(t - b) * 220));
+                out[i] = (lp - hp) * env * 1.4;
+            }
+            return out;
+        }
+        function synthShaker(sr, rnd) {
+            const n = Math.round(0.07 * sr), out = new Float32Array(n);
+            let prev = 0;
+            for (let i = 0; i < n; i++) {
+                const t = i / sr, noise = rnd() * 2 - 1;
+                const hp = noise - prev * 0.75; prev = noise;
+                out[i] = hp * Math.min(1, t / 0.004) * Math.exp(-t * 42) * 0.2;
+            }
+            return out;
+        }
+        function synthConga(sr, freq, slap, rnd) {
+            const n = Math.round(0.28 * sr), out = new Float32Array(n);
+            for (let i = 0; i < n; i++) {
+                const t = i / sr, f = freq * (1 + 0.22 * Math.exp(-t * 70));
+                let v = Math.sin(2 * Math.PI * f * t) * Math.exp(-t * (slap ? 26 : 16)) + 0.25 * Math.sin(2 * Math.PI * f * 2.3 * t) * Math.exp(-t * 40);
+                if (slap && t < 0.006) v += (rnd() * 2 - 1) * Math.exp(-t * 500) * 0.8;
+                out[i] = v * 0.7;
+            }
+            return out;
+        }
+        function synthLogDrum(sr, freq, durSec, rnd) {
+            const n = Math.max(1, Math.round(Math.min(durSec, 0.4) * sr)), out = new Float32Array(n);
+            let phase = 0;
+            for (let i = 0; i < n; i++) {
+                const t = i / sr, f = freq * (1 + 0.16 * Math.exp(-t * 32));
+                phase += 2 * Math.PI * f / sr;
+                const amp = Math.min(1, t / 0.002) * Math.exp(-t * 8.5);
+                let v = Math.sin(phase) + 0.38 * Math.sin(2 * phase) + 0.14 * Math.sin(3 * phase);
+                v = Math.tanh(1.6 * v) * 0.62;
+                if (t < 0.003) v += (rnd() * 2 - 1) * 0.25;
+                out[i] = v * amp;
+            }
+            return out;
+        }
+        function synthPluck(sr, freq, durSec, rnd) {            // Karplus-Strong string
+            const n = Math.max(1, Math.round(durSec * sr)), out = new Float32Array(n);
+            const N = Math.max(2, Math.round(sr / freq)), buf = new Float32Array(N);
+            let prev = 0;
+            for (let i = 0; i < N; i++) { const v = rnd() * 2 - 1; buf[i] = 0.5 * (v + prev); prev = v; }   // softened start = rounder pluck
+            let pos = 0;
+            for (let i = 0; i < n; i++) {
+                const cur = buf[pos], nxt = buf[(pos + 1) % N];
+                buf[pos] = 0.5 * (cur + nxt) * 0.996;
+                out[i] = cur * Math.min(1, i / (0.002 * sr)) * Math.min(1, (n - i) / (0.02 * sr));
+                pos = (pos + 1) % N;
+            }
+            return out;
+        }
+
         function addHit(L, R, hit, at, gL, gR) {
             for (let i = 0; i < hit.length; i++) {
                 const k = at + i;
@@ -675,6 +787,8 @@
 
             const kickHit = synthKick(sr, rnd), snareHit = synthSnare(sr, rnd);
             const hatClosed = synthHat(sr, rnd, false), hatOpen = synthHat(sr, rnd, true);
+            const clapHit = synthClap(sr, rnd), shakerHit = synthShaker(sr, rnd);
+            const congaLow = synthConga(sr, 185 * tune, false, rnd), congaHigh = synthConga(sr, 270 * tune, false, rnd), congaSlap = synthConga(sr, 300 * tune, true, rnd);
 
             // the real kick steps (when the kick is present in the beat) so the bass can lock to them
             const realKick = P.classes.kick.cls === "ok" ? learnPattern(A, "kick", P.classes.kick.bars.filter(b => b.status.kick === "ok")) : null;
@@ -687,11 +801,43 @@
                     const f = follow(b);
                     lay.used.push(b);
 
-                    if (name === "kick" || name === "snare") {
-                        const hit = name === "kick" ? kickHit : snareHit;
+                    if (name === "kick" || name === "snare" || name === "clap") {
+                        const hit = name === "kick" ? kickHit : (name === "clap" ? clapHit : snareHit);
                         for (const s of it.steps) {
                             const vel = (s % 4 === 0 ? 1 : 0.85) * (0.94 + 0.06 * rnd()) * f;
                             addHit(lay.L, lay.R, hit, stepSample(b, s), vel, vel * (name === "snare" ? 0.95 : 1));
+                        }
+                    } else if (name === "shaker") {
+                        // the classic Afrobeats shaker: constant 16ths, the off-beats pushed forward
+                        for (const s of it.steps) {
+                            const accent = s % 4 === 2 ? 0.9 : (s % 4 === 0 ? 0.55 : 0.4);
+                            const vel = accent * (0.92 + 0.08 * rnd()) * f, left = (s % 2 === 0) ? 1 : 0.8;
+                            addHit(lay.L, lay.R, shakerHit, stepSample(b, s), vel * left, vel * (left === 1 ? 0.8 : 1));
+                        }
+                    } else if (name === "conga") {
+                        it.steps.forEach((s, idx) => {
+                            const high = idx % 3 !== 0, slap = s === 7 || s === 14;
+                            const hit = slap ? congaSlap : (high ? congaHigh : congaLow);
+                            const vel = (slap ? 0.9 : 0.7) * (0.9 + 0.1 * rnd()) * f;
+                            addHit(lay.L, lay.R, hit, stepSample(b, s), vel * (high ? 0.7 : 1), vel * (high ? 1 : 0.7));
+                        });
+                    } else if (name === "logdrum" || name === "pluck") {
+                        const ch = P.chords && P.chords[b.j];
+                        if (!ch) continue;
+                        if (name === "logdrum") {
+                            const root = ch.pcs[0], fifth = ch.pcs[2];
+                            const m = (pc) => 38 + (((pc - 38) % 12) + 12) % 12;
+                            [[0, root], [3, root], [6, fifth], [10, root], ...(b.j % 2 ? [[12, fifth]] : [])].forEach(([s, pc]) => {
+                                const hz = midiToHz(m(pc)) * tune;
+                                addHit(lay.L, lay.R, synthLogDrum(sr, hz, 0.3, rnd), stepSample(b, s), f, f);
+                            });
+                        } else {
+                            const v = voice(ch.pcs, 66, 60, 78), seq = [0, 1, 2, 1, 2, 1], steps = [0, 3, 6, 8, 11, 14];
+                            steps.forEach((s, idx) => {
+                                const note = v.notes[seq[idx] % v.notes.length] + (idx === 2 ? 12 : 0);
+                                const hz = midiToHz(note) * tune, vel = (s % 4 === 0 ? 1 : 0.8) * f;
+                                addHit(lay.L, lay.R, synthPluck(sr, hz, 0.4, rnd), stepSample(b, s), vel * 0.9, vel * 1.1);
+                            });
                         }
                     } else if (name === "hat") {
                         for (const s of it.steps) {
@@ -777,7 +923,8 @@
             }
 
             const P = plan(A, o);
-            const names = { kick: "kick", snare: "snare", hat: "hats", bass: "bass", chord: "chords", piano: "piano", strings: "soft strings" };
+            const names = { kick: "kick", snare: "snare", hat: "hats", bass: "bass", chord: "chords", piano: "piano", strings: "soft strings",
+                clap: "claps", shaker: "shaker", conga: "congas", logdrum: "log drum", pluck: "plucked guitar" };
             const added = Object.keys(P.items).map(k => (P.items[k].level ? "light " : "") + names[k]);
 
             const detection = {

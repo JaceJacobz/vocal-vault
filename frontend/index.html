@@ -2,15 +2,17 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Vocal Vault</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#110f18">
+    <meta name="color-scheme" content="dark">
+    <title>Vocal Vault · AI vocal studio</title>
     <link rel="icon" type="image/png" sizes="32x32" href="logo-mark.png">
     <link rel="icon" type="image/png" sizes="16x16" href="logo.png">
     <link rel="apple-touch-icon" href="apple-touch-icon.png">
     <link rel="stylesheet" href="style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500..700&family=Instrument+Sans:wght@400..700&display=swap" rel="stylesheet">
 </head>
 <body>
 
@@ -83,14 +85,18 @@
         </div>
 
         <div class="upload-grid">
-            <div class="upload-card">
+            <div class="upload-card upload-vocal">
+                <span class="upload-icon" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3"/></svg></span>
                 <label for="vocal-input">Vocal track</label>
-                <input type="file" id="vocal-input" accept="audio/*">
+                <span class="upload-hint">Drop your raw vocal here or tap to browse</span>
+                <input type="file" id="vocal-input" accept="audio/*" required>
                 <span id="vocal-file-name" class="file-name">No vocal selected</span>
             </div>
-            <div class="upload-card">
+            <div class="upload-card upload-beat">
+                <span class="upload-icon" aria-hidden="true"><svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h2M7 8v8M11 4v16M15 8v8M19 10v4M21 12h0"/></svg></span>
                 <label for="beat-input">Instrumental beat</label>
-                <input type="file" id="beat-input" accept="audio/*">
+                <span class="upload-hint">Drop the instrumental here or tap to browse</span>
+                <input type="file" id="beat-input" accept="audio/*" required>
                 <span id="beat-file-name" class="file-name">No beat selected</span>
             </div>
         </div>
@@ -548,7 +554,8 @@
             <div class="mix-option">
                 <label for="mix-style">Style</label>
                 <select id="mix-style" aria-describedby="mix-style-hint">
-                    <option value="universal" selected>Universal</option>
+                    <option value="auto" selected>Auto-detect from my beat</option>
+                    <option value="universal">Universal</option>
                     <option value="afrobeats">Afrobeats / Amapiano</option>
                     <option value="trap">Trap / Drill</option>
                     <option value="rap">Rap / Hip-Hop</option>
@@ -727,16 +734,20 @@
                     <span id="tr-time-total" class="tr-time">0:00.0</span>
                 </div>
                 <div class="transport-right">
-                    <label class="tr-loop"><input type="checkbox" id="tr-loop"> Loop</label>
-                    <label class="tr-countin" title="1-bar count-in before record">
-                        <input type="checkbox" id="tr-countin" checked> Count-in
-                    </label>
-                    <label class="tr-countin" title="Disable noise suppression / AGC (can be hissy on laptop mics)">
-                        <input type="checkbox" id="tr-raw-mic"> Raw mic
-                    </label>
-                    <div class="tr-meter" title="Input level"><div id="tr-meter-fill" class="tr-meter-fill"></div></div>
-                    <span id="tr-status" class="tr-status">Ready</span>
-                    <span id="track-count-label" class="tr-count">0 / 20</span>
+                    <div class="tr-opts">
+                        <label class="tr-loop"><input type="checkbox" id="tr-loop"> Loop</label>
+                        <label class="tr-countin" title="1-bar count-in before record">
+                            <input type="checkbox" id="tr-countin" checked> Count-in
+                        </label>
+                        <label class="tr-countin" title="Disable noise suppression / AGC (can be hissy on laptop mics)">
+                            <input type="checkbox" id="tr-raw-mic"> Raw mic
+                        </label>
+                    </div>
+                    <div class="tr-readout">
+                        <div class="tr-meter" title="Input level"><div id="tr-meter-fill" class="tr-meter-fill"></div></div>
+                        <span id="tr-status" class="tr-status">Ready</span>
+                        <span id="track-count-label" class="tr-count">0 / 20</span>
+                    </div>
                 </div>
             </div>
         </div>
@@ -753,6 +764,7 @@
 <script src="presets.js"></script>
 <script src="automix.js"></script>
 <script src="fill.js"></script>
+<script src="genre.js"></script>
 <script src="prep.js"></script>
 <script src="tune.js"></script>
 <script src="mixui.js"></script>
@@ -810,13 +822,45 @@
         if (pc) pc.textContent = String(current);
         if (pn) pn.textContent = names[current] || "";
 
-        // Sticky CTA mirrors the visible section primary button
+        // Sticky CTA: prefer the step's "Continue" action, not Play / Run again
         const sticky = document.getElementById("pipeline-sticky-cta");
         const stickyBtn = document.getElementById("sticky-cta-btn");
         const stickyLabel = document.getElementById("sticky-cta-label");
         const sectionId = sectionIds.find((id) => map[id] === current);
         const section = sectionId && document.getElementById(sectionId);
-        const primary = section && section.querySelector(".primary-button:not([hidden])");
+        let primary = null;
+        if (section && current < 6) {
+            const preferIds = [
+                "continue-mix-button",
+                "continue-from-prep-button",
+                "continue-tune-button",
+                "continue-prep-button",
+                "continue-analysis-button",
+                "start-alignment-button",
+                "automix-button"
+            ];
+            for (const id of preferIds) {
+                const el = section.querySelector("#" + id);
+                if (el && !el.classList.contains("hidden") && el.offsetParent !== null) {
+                    primary = el;
+                    break;
+                }
+            }
+            // Tune: after results, always offer Continue to Mix (not Run again)
+            if (current === 5) {
+                const results = document.getElementById("tune-results");
+                const cont = document.getElementById("continue-mix-button");
+                if (results && !results.classList.contains("hidden") && cont) {
+                    primary = cont;
+                } else {
+                    const run = document.getElementById("tune-run-button");
+                    if (run) primary = run;
+                }
+            }
+            if (!primary) {
+                primary = section.querySelector(".primary-button:not([hidden])");
+            }
+        }
         if (sticky && stickyBtn) {
             if (primary && current < 6) {
                 sticky.hidden = false;
@@ -867,11 +911,16 @@
         const el = document.getElementById(id);
         if (el) obs.observe(el, { attributes: true, attributeFilter: ["class"] });
     });
+    const tuneResults = document.getElementById("tune-results");
+    if (tuneResults) {
+        obs.observe(tuneResults, { attributes: true, attributeFilter: ["class"] });
+    }
     const player = document.getElementById("mix-audio-player");
     if (player) {
         const mo = new MutationObserver(refresh);
         mo.observe(player, { attributes: true, attributeFilter: ["src"] });
     }
+    window.vvRefreshPipelineChrome = refresh;
     refresh();
 })();
 </script>
