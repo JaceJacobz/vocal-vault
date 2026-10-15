@@ -1019,51 +1019,102 @@ function createStudioEngine() {
         });
     }
 
-    // Soft expander: pull down only the quiet floor so hiss/static between
-    // phrases disappears, without the musical noise of heavy spectral denoise.
-    // Soft expander: pull down only the quiet floor so hiss/static between
-    // phrases disappears, without the musical noise of heavy spectral denoise.
+    // Soft expander: pull down only the quiet floor so hiss/static between phrases fades, without the
+    // musical noise of heavy spectral denoise.
+    //
+    // The first version decided open/closed from loudness alone, every 10 ms, with no memory. On a quiet take (singing
+    // only 15-25 dB above the room noise) every soft note, fade-out and quiet word ending dipped under the threshold, so
+    // the gate chattered open and shut on SUNG material: audible "break points" in a vocal that should be smooth.
+    // This version:
+    //   - counts a frame as singing if it has a clear pitch (periodicity is level-independent, so it works on quiet takes)
+    //     or is simply well above the noise
+    //   - opens early (it can look ahead, this is offline) and holds open after the last singing
+    //   - never closes for a gap shorter than ~0.25 s (a breath between words is not a gap between phrases)
+    //   - closes slowly, so what it does do cannot be heard as a step
+    //   - works less the closer the take is to the noise (a gate cannot separate them cleanly): at poor signal-to-noise
+    //     it backs off, and below the point where it would only chop it does nothing
+    function voicedFrames(mono, sr, frames, hop) {
+
+        // 4x-ish downsample (box average), then normalised autocorrelation over 80-1000 Hz lags
+        const ds = Math.max(1, Math.round(sr / 11025)), m = Math.floor(mono.length / ds), x = new Float32Array(m);
+        for (let i = 0; i < m; i++) { let s = 0; for (let k = 0; k < ds; k++) s += mono[i * ds + k]; x[i] = s / ds; }
+        const rate = sr / ds, win = Math.round(0.025 * rate), lagLo = Math.max(2, Math.round(rate / 1000)), lagHi = Math.round(rate / 80);
+        const stride = 2, out = new Uint8Array(frames), conf = new Float32Array(frames);
+        for (let f = 0; f < frames; f += stride) {
+            const centre = Math.round((f * hop + hop / 2) / ds), a = centre - (win >> 1);
+            if (a < 0 || a + win + lagHi >= m) continue;
+            let e0 = 0; for (let i = 0; i < win; i++) e0 += x[a + i] * x[a + i];
+            if (e0 < 1e-12) continue;
+            let best = 0;
+            for (let lag = lagLo; lag <= lagHi; lag++) {
+                let r = 0, e1 = 0;
+                for (let i = 0; i < win; i++) { const v = x[a + i + lag]; r += x[a + i] * v; e1 += v * v; }
+                const c = r / Math.sqrt(e0 * e1 + 1e-30);
+                if (c > best) best = c;
+            }
+            conf[f] = best; if (f + 1 < frames) conf[f + 1] = best;
+            out[f] = best >= 0.5 ? 1 : 0; if (f + 1 < frames) out[f + 1] = out[f];
+        }
+        return { voiced: out, conf };
+    }
+
     function phraseGate(channels, sr, options) {
-        // 7 dB is enough to hide hiss without the “gated cheap mic” feel of −10
-        const o = Object.assign({ depthDb: 7, openSec: 0.01, closeSec: 0.09 }, options || {});
-        const n = channels[0].length;
-        const hop = Math.max(1, Math.round(0.01 * sr));
-        const frames = Math.ceil(n / hop);
+
+        const o = Object.assign({
+            depthDb: 7, minDepthDb: 1.5, snrFloorDb: 14, snrSlope: 0.45,
+            holdSec: 0.15, preOpenSec: 0.05, minGapSec: 0.25, attackSec: 0.006, releaseSec: 0.15
+        }, options || {});
+        const n = channels[0].length, hop = Math.max(1, Math.round(0.01 * sr)), frames = Math.ceil(n / hop);
+        const none = { channels, applied: false };
+
         const mono = new Float32Array(n);
-        for (let c = 0; c < channels.length; c++) {
-            const x = channels[c];
-            for (let i = 0; i < n; i++) mono[i] += x[i] / channels.length;
-        }
-        const rms = new Float32Array(frames);
+        for (let c = 0; c < channels.length; c++) { const x = channels[c]; for (let i = 0; i < n; i++) mono[i] += x[i] / channels.length; }
+        const rms = new Float32Array(frames), db = new Float32Array(frames);
         for (let f = 0; f < frames; f++) {
-            let e = 0;
-            const a = f * hop, b = Math.min(n, a + hop);
+            let e = 0; const a = f * hop, b = Math.min(n, a + hop);
             for (let i = a; i < b; i++) e += mono[i] * mono[i];
-            rms[f] = Math.sqrt(e / Math.max(1, b - a));
+            rms[f] = Math.sqrt(e / Math.max(1, b - a)); db[f] = 20 * Math.log10(rms[f] + 1e-9);
         }
-        const sorted = Float32Array.from(rms).sort();
-        const loud = sorted[Math.floor(frames * 0.9)] || 1e-6;
-        const thr = Math.max(loud * 0.05, sorted[Math.floor(frames * 0.12)] * 1.6);
-        const floorGain = Math.pow(10, -o.depthDb / 20);
-        const up = 1 - Math.exp(-hop / o.openSec);
-        const down = 1 - Math.exp(-hop / o.closeSec);
-        let g = 1, closed = 0;
+        if (frames < 100) return none;
+        const sorted = Float32Array.from(db).sort();
+        const noise = sorted[Math.floor(frames * 0.10)], loud = sorted[Math.floor(frames * 0.90)], snr = loud - noise;
+
+        // how much separation is there between the singing and the room? a gate can only hide what it can cleanly tell apart
+        const depth = Math.min(o.depthDb, Math.max(0, (snr - o.snrFloorDb) * o.snrSlope));
+        if (depth < o.minDepthDb) return Object.assign({}, none, { skipped: "close-to-noise", snrDb: snr });
+
+        const { voiced } = voicedFrames(mono, sr, frames, hop);
+        const openDb = noise + 0.4 * snr;
+        const sung = new Uint8Array(frames);
+        for (let f = 0; f < frames; f++) sung[f] = ((voiced[f] && db[f] > noise + 3) || db[f] >= openDb) ? 1 : 0;
+
+        // hold after, and open before (the gate can look ahead: no clipped word starts)
+        const hold = Math.round(o.holdSec / 0.01), pre = Math.round(o.preOpenSec / 0.01), open = new Uint8Array(frames);
+        for (let f = 0; f < frames; f++) if (sung[f]) { for (let k = Math.max(0, f - pre); k <= Math.min(frames - 1, f + hold); k++) open[k] = 1; }
+        // a quiet stretch shorter than minGap is a pause inside a phrase, not a gap between phrases
+        const minGap = Math.round(o.minGapSec / 0.01);
+        for (let f = 0; f < frames;) {
+            if (open[f]) { f++; continue; }
+            let g = f; while (g < frames && !open[g]) g++;
+            if (f > 0 && g < frames && g - f < minGap) for (let k = f; k < g; k++) open[k] = 1;
+            f = g;
+        }
+
+        const floorGain = Math.pow(10, -depth / 20);
+        const up = 1 - Math.exp(-hop / (o.attackSec * sr)), down = 1 - Math.exp(-hop / (o.releaseSec * sr));
         const gain = new Float32Array(n);
+        let g = 1, closed = 0;
         for (let f = 0; f < frames; f++) {
-            const want = rms[f] >= thr ? 1 : floorGain;
+            const want = open[f] ? 1 : floorGain;
             g += (want < g ? down : up) * (want - g);
             if (g < 0.95) closed++;
             const a = f * hop, b = Math.min(n, a + hop);
             for (let i = a; i < b; i++) gain[i] = g;
         }
-        if (closed / frames > 0.55) return { channels, applied: false };
+        if (closed / frames > 0.55) return none;
         return {
-            channels: channels.map((x) => {
-                const y = new Float32Array(n);
-                for (let i = 0; i < n; i++) y[i] = x[i] * gain[i];
-                return y;
-            }),
-            applied: true, depthDb: o.depthDb
+            channels: channels.map((x) => { const y = new Float32Array(n); for (let i = 0; i < n; i++) y[i] = x[i] * gain[i]; return y; }),
+            applied: true, depthDb: Math.round(depth * 10) / 10, snrDb: snr
         };
     }
 
@@ -1412,8 +1463,10 @@ function createStudioEngine() {
             const g = phraseGate(ch, sr);
             ch = g.channels;
             report.push(g.applied
-                ? `Quieted gaps between phrases by up to ${g.depthDb} dB (cuts hiss/static in the silences).`
-                : `Checked the gaps between phrases: already tight.`);
+                ? `Quieted gaps between phrases by ${g.depthDb} dB (cuts hiss/static in the silences)` + (g.depthDb < 6 ? ", gently, because the take sits fairly close to the room noise" : "") + "."
+                : (g.skipped === "close-to-noise"
+                    ? `Left the gaps between phrases alone: this take sits close to the room noise, and gating it would chop soft notes.`
+                    : `Checked the gaps between phrases: already tight.`));
         }
 
         return { channels: ch, deEss: de, eq, strain, resonance, report };

@@ -17,6 +17,7 @@
 const LOUDNESS_TARGETS = [
     { lufs: -14, label: "Streaming / open, −14 LUFS (default — keeps vocal character)" },
     { lufs: -12, label: "Balanced, −12 LUFS" },
+    { lufs: -10, label: "Punchy, −10 LUFS (hip-hop / trap, tighter limiting)" },
     { lufs: -16, label: "Apple Music / Sound Check, −16 LUFS" },
     { lufs: -9,  label: "Loud, −9 LUFS (club — more limiting, can thin the vocal)" }
 ];
@@ -238,6 +239,7 @@ if (typeof module !== "undefined") {
         // Suggest loudness when style changes (user can still override)
         const recipe = P.resolve(sel.value, (document.getElementById("mix-polish") || {}).value || "radio");
         const target = document.getElementById("master-target");
+        const targetBefore = target ? target.value : null;
         if (target && recipe.suggestedLufs != null) {
             const want = String(recipe.suggestedLufs);
             for (const opt of target.options) {
@@ -253,6 +255,9 @@ if (typeof module !== "undefined") {
                     break;
                 }
             }
+            // Changing .value in code does not fire "change", so the app kept mixing to the OLD target while the dropdown
+            // showed the new one. Tell it.
+            if (target.value !== targetBefore) target.dispatchEvent(new Event("change"));
         }
     }
     document.addEventListener("DOMContentLoaded", () => {
