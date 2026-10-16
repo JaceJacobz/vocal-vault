@@ -613,6 +613,16 @@
                 <input type="text" id="export-filename" class="export-filename" placeholder="My song name" maxlength="80" autocomplete="off">
                 <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="About file name" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Optional. Leave blank to use the default file name.</span></span>
             </div>
+            <div class="mix-option mix-option-wide">
+                <label for="instrument-balance">Instrument balance</label>
+                <select id="instrument-balance">
+                    <option value="balanced" selected>Balanced (recommended)</option>
+                    <option value="subtle">Subtle</option>
+                    <option value="full">Full: instruments really out front</option>
+                    <option value="off">Off: leave the beat as it is</option>
+                </select>
+                <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="About instrument balance" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Brings out the piano, keys, guitars, pads and strings in your beat (and the snare and hats) so you can hear them under the voice, like a studio mix. It lifts them just enough to sit a bit under the vocal, mostly while you sing. Kick and bass are not touched. If they are already audible, nothing changes.</span></span>
+            </div>
             <div class="mix-option mix-option-wide pro-only">
                 <label for="harmony-select">Higher harmony</label>
                 <select id="harmony-select">
@@ -708,7 +718,7 @@
                     </ol>
                     <p class="control-with-tip studio-empty-tip">
                         <span class="control-tip-label">Mix levels</span>
-                        <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Adlibs and tags default to Auto levels under the main vocal. Change any lane if you want it louder or quieter.</span></span>
+                        <span class="info-tip"><button type="button" class="info-tip-btn" aria-label="More info" aria-expanded="false"><svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="7" cy="7" r="6" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M7 6.2v3.6M7 4.2h.01" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button><span class="info-tip-panel" role="tooltip">Adlibs and tags default to Auto, a typical place under the lead. Pick Relatively lower or Relatively higher to move a lane a bit under or over the lead, Same as the lead to bring a soft intro up to the lead, or Keep as recorded to leave its volume exactly as it was.</span></span>
                     </p>
                 </div>
             </div>
@@ -765,9 +775,11 @@
 <script src="automix.js"></script>
 <script src="fill.js"></script>
 <script src="genre.js"></script>
+<script src="balance.js"></script>
 <script src="prep.js"></script>
 <script src="tune.js"></script>
 <script src="mixui.js"></script>
+<script src="studiolevels.js"></script>
 <script src="daw.js"></script>
 
 <script>

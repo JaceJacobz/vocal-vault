@@ -185,7 +185,11 @@ function createLevelEngine() {
 
         // Loudness of each track, on the BEAT's timeline
         const beatPow = momentary(hopPowers(beatChannels, sr));
-        const vocalPowOwn = momentary(hopPowers(vocalChannels, sr));
+        // Studio lanes: balance and ride the LEAD only (o.measureChannels, on the same timeline as the vocal), then put that
+        // one fader on the whole composite. Adlibs, tags and soft intros then keep the level they were given relative to the
+        // lead, instead of being pulled toward it by a ride that listens to everything at once.
+        const measureCh = (o.measureChannels && o.measureChannels[0] && o.measureChannels[0].length) ? o.measureChannels : vocalChannels;
+        const vocalPowOwn = momentary(hopPowers(measureCh, sr));
 
         const beatP = new Float64Array(N), vocalP = new Float64Array(N);
         const shift = Math.round(offsetSec / HOP_SEC);
@@ -209,9 +213,11 @@ function createLevelEngine() {
         let activeCount = 0;
         for (let j = 0; j < N; j++) if (vocalDb[j] >= gate) { active[j] = 1; activeCount++; }
 
+        const optionsOut = Object.assign({}, o); delete optionsOut.measureChannels;
         const result = {
             mode: o.mode,
-            options: o,
+            options: optionsOut,
+            measuredFromLead: measureCh !== vocalChannels,
             hopSec: HOP_SEC,
             blockCenterSec: BLOCK_CENTER,
             offsetSec,

@@ -96,6 +96,14 @@ if (typeof document !== "undefined") document.addEventListener("DOMContentLoaded
     targetSelect.addEventListener("change", applyTarget);
     applyTarget();
 
+    // instrument balance (off / subtle / balanced / full). Read by automix.js.
+    const balanceSelect = $("instrument-balance");
+    if (balanceSelect) {
+        const applyBalance = () => { S.instrumentBalance = balanceSelect.value || "balanced"; };
+        balanceSelect.addEventListener("change", applyBalance);
+        applyBalance();
+    }
+
     // optional higher harmony layer (0 = off). Read by automix.js.
     const harmonySelect = $("harmony-select");
     if (harmonySelect) {

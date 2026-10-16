@@ -701,10 +701,19 @@ async function processAutomix(state, options) {
 
   // Listen first: hot/strained → light path; raw/cracks → smooth path; else full
   const assessment = assessVocalTake(vocal);
+  const _stackEarly = !!(state.studioStack && state.studioStack.leadReference && state.studioStack.extras > 0 &&
+    Math.abs(state.studioStack.leadReference.duration - vocal.duration) < 0.02);
+  if (_stackEarly && assessment.path === "smooth") assessment.path = "full";   // uneven on purpose: soft intro, lower adlibs
   const balanceMode = (opt.balanceMode || (typeof document !== "undefined" && document.getElementById("mix-balance") && document.getElementById("mix-balance").value) || "balanced");
   if (recipe) {
     recipe = applyAdaptiveRecipe(recipe, assessment, balanceMode);
   }
+
+  // Studio lanes: Studio mode also sent the lead on its own. Then the lanes' levels are deliberate (a soft intro, adlibs set a
+  // bit under or over the lead), so nothing here may "even them out": no extra evening for an uneven-looking take, no phrase
+  // evening across lanes, and the balance against the beat and the fader ride listen to the LEAD only.
+  const studioStack = (state.studioStack && state.studioStack.leadReference && state.studioStack.extras > 0 &&
+    Math.abs(state.studioStack.leadReference.duration - vocal.duration) < 0.02) ? state.studioStack : null;
 
   const first = calculateAutoMixParams(vocal, beat, metadata);
 
@@ -742,6 +751,7 @@ async function processAutomix(state, options) {
     await nextFrame();
     const prepOpts = { highPassHz: first.hpfCutoff };
     if (recipe) prepOpts.eq = recipe.eq;
+    if (studioStack) prepOpts.phraseEven = false;      // it would lift the soft lanes and lower the lead toward each other
     const prepared = Studio.prepareVocal(vocal, prepOpts);
     lines.push(...prepared.report);
     working = prepared.buffer;
@@ -873,6 +883,16 @@ async function processAutomix(state, options) {
     beatChannels = fill.channels;
     lines.push(...fill.report);
     state.instrumentFill = fill.detection;
+  }
+
+  if (studioStack) {
+    const SLv = window.VocalVaultStudioLevels;
+    if (SLv && SLv.leadLikeProcessed && engine.hopPowers) {
+      const refCh = channelsOf(studioStack.leadReference).map((c) => engine.resample(c, studioStack.leadReference.sampleRate, sr));
+      const rawCh = channelsOf(vocal).map((c) => engine.resample(c, vocal.sampleRate, sr));
+      levelOptions = Object.assign({}, levelOptions || {}, { measureChannels: SLv.leadLikeProcessed(refCh, rawCh, vocalChannels, sr, engine.hopPowers) });
+      lines.push(`Studio lanes: balanced the lead against the beat and kept your ${studioStack.extras} other lane${studioStack.extras === 1 ? "" : "s"} at the level you set relative to it (no evening between lanes).`);
+    }
   }
 
   const plan = engine.plan(vocalChannels, beatChannels, sr, offset, levelOptions);
@@ -1011,6 +1031,29 @@ async function processAutomix(state, options) {
       const dip = Fx.duckBeatMid(beatChannels, Fx.toMono(placed), sr, { depthDb: space.midDuckDb });
       beatForMix = dip.channels;
       lines.push(`Dipped the beat's mids by up to ${Number(dip.depthDb).toFixed(1)} dB around 2 kHz while you sing, so the voice sits in the beat instead of on top of it. This dip leaves the low end alone.`);
+    }
+  }
+
+  // 4b. Instrument balance: the beat's piano, keys, guitars, pads, snare and hats, so they are heard under the voice.
+  // Measured against the voice as it is placed (after the mid dip above), and only as far as needed.
+  const Bal = window.VocalVaultBalance;
+  const balancePreset = typeof state.instrumentBalance === "string" ? state.instrumentBalance : "balanced";
+  if (Bal && Bal.balanceBeat && balancePreset !== "off") {
+    setStatus("Balancing the instruments…");
+    await nextFrame();
+    try {
+      const placedForBalance = engine.placeVocal(vocalChannels, sr, plan, Math.ceil(plan.totalSec * sr));
+      const mono = placedForBalance.length === 1 ? placedForBalance[0] : (() => {
+        const m = new Float32Array(placedForBalance[0].length);
+        for (let c = 0; c < placedForBalance.length; c++) for (let i = 0; i < m.length; i++) m[i] += placedForBalance[c][i] / placedForBalance.length;
+        return m;
+      })();
+      const bal = Bal.balanceBeat(beatForMix, mono, sr, { preset: balancePreset });
+      if (bal.applied) beatForMix = bal.channels;
+      lines.push(...bal.report);
+    } catch (error) {
+      console.error("Instrument balance failed:", error);
+      lines.push("Instrument balance skipped (something went wrong); the beat was left as it is.");
     }
   }
 

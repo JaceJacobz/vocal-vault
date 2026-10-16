@@ -30,24 +30,15 @@
     };
 
     // Relative level of each lane in the composite sent to Pipeline / mix.
-    // "auto" listens to the take and places it vs the main vocal.
-    const MIX_LEVELS = {
-        auto:    { label: "Auto",    db: null, blurb: "Vocal Vault picks the level from the take (best for most people)" },
-        lead:    { label: "Lead",    db: 0,    blurb: "Primary — full level in the mix" },
-        same:    { label: "Same",    db: 0,    blurb: "Same relative level as the lead" },
-        quieter: { label: "Quieter", db: -6.5, blurb: "Sit under the lead (typical for adlibs)" },
-        louder:  { label: "Louder",  db: 3.0,  blurb: "Push above the lead (shouts / tags)" },
-        mute:    { label: "Mute",    db: null, blurb: "Skip this lane in the composite" }
+    // All the maths lives in studiolevels.js (measured against how loud the lead SOUNDS, not against the recorded
+    // volume). If that file is missing, lanes simply stay as recorded.
+    const SL = window.VocalVaultStudioLevels || {
+        MIX_LEVELS: { keep: { label: "Keep as recorded", blurb: "No level change" }, mute: { label: "Mute", blurb: "Skip this lane" } },
+        normalizeMode: (m) => (m === "mute" ? "mute" : "keep"),
+        activeLevel: () => ({ db: -120, activeSec: 0 }),
+        resolveGain: (a) => (a.mode === "mute" ? { db: null, lin: 0, key: "mute", label: "Mute" } : { db: 0, lin: 1, key: "keep", label: "Keep as recorded" })
     };
-
-    // Target level vs the main vocal (dB) when Mix is Auto
-    const AUTO_TARGET_DB = {
-        main: 0,
-        adlib: -6.0,
-        tag: -7.5,
-        harmony: -4.5,
-        other: -3.5
-    };
+    const MIX_LEVELS = SL.MIX_LEVELS;
 
     const HARMONY_INTERVALS = {
         0: { label: "Off (use take as-is)", degrees: 0 },
@@ -60,21 +51,11 @@
         return "auto";
     }
 
-    function laneRmsDb(lane) {
-        let e = 0, n = 0;
-        for (const clip of (lane.clips || [])) {
-            if (!clip.buffer) continue;
-            const ch = clip.buffer.getChannelData(0);
-            // Sample sparsely for speed
-            const step = Math.max(1, Math.floor(ch.length / 8000));
-            for (let i = 0; i < ch.length; i += step) {
-                const v = ch[i];
-                e += v * v;
-                n++;
-            }
-        }
-        if (!n) return -120;
-        return 20 * Math.log10(Math.sqrt(e / n) + 1e-12);
+    // how loud a lane sounds while it is sounding (silence and breaths ignored)
+    function laneLevel(lane) {
+        const clips = [];
+        for (const clip of (lane.clips || [])) if (clip.buffer) clips.push({ data: clip.buffer.getChannelData(0), sr: clip.buffer.sampleRate });
+        return SL.activeLevel(clips);
     }
 
     function findMainLane() {
@@ -83,37 +64,22 @@
         return main || withClips[0] || null;
     }
 
-    /** Resolve linear gain for a lane (Auto listens; manual uses fixed dB). */
+    /** Resolve linear gain for a lane against the lead's measured level. */
     function resolveLaneGain(lane, mainDb) {
-        const key = lane.mixLevel || defaultMixLevel(lane.type);
-        if (key === "mute") return { lin: 0, db: null, key: "mute", label: "Mute" };
-        if (key !== "auto") {
-            const meta = MIX_LEVELS[key] || MIX_LEVELS.same;
-            const db = meta.db == null ? 0 : meta.db;
-            return { lin: Math.pow(10, db / 20), db, key, label: meta.label };
-        }
-        // Auto: place this take relative to the main vocal's measured level
-        const myDb = laneRmsDb(lane);
-        const targetRel = AUTO_TARGET_DB[lane.type] != null ? AUTO_TARGET_DB[lane.type] : -3.5;
-        const ref = (mainDb != null && mainDb > -100) ? mainDb : myDb;
-        // For the main lane itself, leave near unity (only tiny trim if absurdly hot)
-        let gainDb;
-        if (lane.type === "main" || lane === findMainLane()) {
-            gainDb = 0;
-            // If main is very quiet vs a dense stack, still leave at 0
-        } else {
-            gainDb = (ref + targetRel) - myDb;
-            // Clamp so we never destroy a take or blast it
-            if (gainDb > 4) gainDb = 4;
-            if (gainDb < -12) gainDb = -12;
-        }
-        const label = "Auto " + (gainDb >= 0 ? "+" : "") + gainDb.toFixed(1) + " dB";
-        return { lin: Math.pow(10, gainDb / 20), db: gainDb, key: "auto", label };
+        const lvl = laneLevel(lane);
+        return SL.resolveGain({
+            mode: lane.mixLevel || defaultMixLevel(lane.type),
+            type: lane.type,
+            laneDb: lvl.db,
+            laneActiveSec: lvl.activeSec,
+            leadDb: mainDb,
+            isLead: lane === findMainLane()
+        });
     }
 
     function mainReferenceDb() {
         const main = findMainLane();
-        return main ? laneRmsDb(main) : -120;
+        return main ? laneLevel(main).db : -120;
     }
 
     let lanes = [];
@@ -395,17 +361,13 @@
 
     function setMixLevel(id, level) {
         const l = lanes.find((x) => x.id === id);
+        level = SL.normalizeMode(level);
         if (!l || !MIX_LEVELS[level]) return;
         l.mixLevel = level;
         renderLanes();
-        const meta = MIX_LEVELS[level];
-        if (level === "auto") {
-            const mainDb = mainReferenceDb();
-            const g = resolveLaneGain(l, mainDb);
-            status(l.name + " → Auto (about " + (g.db >= 0 ? "+" : "") + (g.db != null ? g.db.toFixed(1) : "0") + " dB vs main)");
-        } else {
-            status(l.name + " → " + meta.label + (meta.db == null ? " (skipped in mix)" : " (" + (meta.db >= 0 ? "+" : "") + meta.db + " dB)"));
-        }
+        if (level === "mute") { status(l.name + " → Mute (skipped in mix)"); return; }
+        const g = resolveLaneGain(l, mainReferenceDb());
+        status(l.name + " → " + g.label);
     }
 
     function setHarmonyDegrees(id, degrees) {
@@ -452,18 +414,18 @@
             const row = document.createElement("div");
             row.className = "studio-lane" + (lane.armed ? " is-armed" : "");
             row.dataset.laneId = lane.id;
-            const level = lane.mixLevel || defaultMixLevel(lane.type);
+            const level = SL.normalizeMode(lane.mixLevel || defaultMixLevel(lane.type));
             let levelOpts = "";
             for (const key of Object.keys(MIX_LEVELS)) {
                 const m = MIX_LEVELS[key];
                 levelOpts += '<option value="' + key + '"' + (key === level ? " selected" : "") + ">" + m.label + "</option>";
             }
             let autoHint = "";
-            if (level === "auto" && lane.clips.length) {
+            if (level !== "mute" && lane.clips.length) {
                 const g = resolveLaneGain(lane, mainReferenceDb());
                 if (g.db != null) {
                     autoHint = '<small class="lane-auto-hint">' +
-                        (g.db === 0 ? "Auto: lead level" : ("Auto: " + (g.db > 0 ? "+" : "") + g.db.toFixed(1) + " dB")) +
+                        (g.noReference ? "No lead to compare with" : (level === "keep" || g.db === 0 ? "As recorded" : ((g.db > 0 ? "+" : "−") + Math.abs(g.db).toFixed(1) + " dB vs recorded"))) +
                         "</small>";
                 }
             }
@@ -1056,6 +1018,21 @@
         }
 
         const rendered = await offline.startRendering();
+
+        // Lead-only reference on the same timeline: the pipeline balances and rides the LEAD, so adlibs, tags and soft
+        // intros keep the level set here relative to it (see levelmatch.js measureChannels).
+        let stack = null;
+        if (mainLane && active.length > 1 && mainLane.clips.some((c) => c.buffer)) {
+            const leadCtx = new OfflineAudioContext(1, length, sr);
+            for (const clip of mainLane.clips) {
+                if (!clip.buffer) continue;
+                const src = leadCtx.createBufferSource();
+                src.buffer = clip.buffer;
+                src.connect(leadCtx.destination);
+                src.start(Math.max(0, clip.start));
+            }
+            stack = { leadReference: await leadCtx.startRendering(), extras: active.length - 1 };
+        }
         const wav = audioBufferToWav(rendered);
         return new File([wav], lane.name.replace(/\s+/g, "_") + "_comp.wav", { type: "audio/wav" });
     }
@@ -1210,7 +1187,8 @@
         return {
             file: new File([wav], name, { type: "audio/wav" }),
             report,
-            laneCount: active.length
+            laneCount: active.length,
+            stack
         };
     }
 
@@ -1276,6 +1254,7 @@
 
             assignFile(els.vocalInput, composite.file, els.vocalFileName);
             assignFile(els.beatFileInput, beatFile, els.beatFileName);
+            if (window.VocalVaultState) window.VocalVaultState.studioStack = composite.stack || null;
             refreshRoles();
             setMode("pipeline");
             const summary = composite.report.length
