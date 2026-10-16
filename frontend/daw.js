@@ -1018,21 +1018,6 @@
         }
 
         const rendered = await offline.startRendering();
-
-        // Lead-only reference on the same timeline: the pipeline balances and rides the LEAD, so adlibs, tags and soft
-        // intros keep the level set here relative to it (see levelmatch.js measureChannels).
-        let stack = null;
-        if (mainLane && active.length > 1 && mainLane.clips.some((c) => c.buffer)) {
-            const leadCtx = new OfflineAudioContext(1, length, sr);
-            for (const clip of mainLane.clips) {
-                if (!clip.buffer) continue;
-                const src = leadCtx.createBufferSource();
-                src.buffer = clip.buffer;
-                src.connect(leadCtx.destination);
-                src.start(Math.max(0, clip.start));
-            }
-            stack = { leadReference: await leadCtx.startRendering(), extras: active.length - 1 };
-        }
         const wav = audioBufferToWav(rendered);
         return new File([wav], lane.name.replace(/\s+/g, "_") + "_comp.wav", { type: "audio/wav" });
     }
@@ -1058,7 +1043,7 @@
     }
 
     function keyOptionsForHarmony() {
-        const S = window.state || {};
+        const S = window.VocalVaultState || window.state || {};
         let rootPc = 0, scale = "major", refCents = 0;
         if (S.tuneOptions) {
             if (S.tuneOptions.rootPc != null) rootPc = S.tuneOptions.rootPc;
@@ -1180,6 +1165,30 @@
         }
 
         const rendered = await offline.startRendering();
+
+        // Lead-only reference on the same timeline so Pipeline can balance/ride
+        // the lead while keeping adlibs/tags at the relative level set here.
+        let stack = null;
+        if (mainLane && active.length > 1 && mainLane.clips.some((c) => c.buffer)) {
+            try {
+                const leadCtx = new OfflineAudioContext(1, length, sr);
+                for (const clip of mainLane.clips) {
+                    if (!clip.buffer) continue;
+                    const src = leadCtx.createBufferSource();
+                    src.buffer = clip.buffer;
+                    src.connect(leadCtx.destination);
+                    src.start(Math.max(0, clip.start));
+                }
+                stack = {
+                    leadReference: await leadCtx.startRendering(),
+                    extras: active.length - 1
+                };
+            } catch (leadErr) {
+                console.warn("Lead reference render failed", leadErr);
+                stack = null;
+            }
+        }
+
         const wav = audioBufferToWav(rendered);
         const name = active.length === 1
             ? active[0].name.replace(/\s+/g, "_") + "_comp.wav"
@@ -1263,8 +1272,9 @@
             status("Sent " + composite.laneCount + " lane(s) to Pipeline — " + summary);
             $("upload-section")?.scrollIntoView({ behavior: "smooth", block: "start" });
         } catch (e) {
-            console.warn(e);
-            status("Render failed");
+            console.warn("sendToPipeline failed", e);
+            const msg = (e && e.message) ? e.message : String(e || "unknown error");
+            status("Render failed: " + msg);
         }
     }
 
